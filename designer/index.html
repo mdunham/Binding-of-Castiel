@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IsaacLike — Content Designer</title>
+  <link rel="stylesheet" href="./designer.css" />
+</head>
+<body>
+  <header>
+    <h1>ISAACLIKE · DESIGNER</h1>
+    <div class="spacer"></div>
+    <button id="loadBtn">Load content.json…</button>
+    <button id="reloadBtn">Reload from server</button>
+    <button id="saveBtn" class="primary">Save content.json</button>
+    <a id="playLink" href="../game/index.html" target="_blank"><button class="go">▶ Play</button></a>
+    <input id="fileInput" type="file" accept="application/json" class="hidden" />
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="characters">Characters &amp; Enemies</div>
+    <div class="tab" data-tab="weapons">Weapons</div>
+  </div>
+
+  <div id="errors" class="errors"></div>
+
+  <main>
+    <div class="list">
+      <button id="addBtn" style="width:100%;margin-bottom:8px;">+ New</button>
+      <div id="listItems"></div>
+    </div>
+
+    <div id="formWrap" class="form">
+      <div class="empty">Select an item, or click “+ New”.</div>
+    </div>
+
+    <div class="preview">
+      <h3>PREVIEW</h3>
+      <canvas id="previewCanvas" width="240" height="240"></canvas>
+    </div>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script type="module" src="./designer.js"></script>
+</body>
+</html>

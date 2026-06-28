@@ -1,0 +1,11 @@
+{
+  "name": "isaaclike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A data-driven Binding of Isaac-style game + content designer. Zero dependencies.",
+  "scripts": {
+    "start": "node serve.js",
+    "test": "node tests/run.js"
+  }
+}
