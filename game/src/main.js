@@ -23,7 +23,7 @@ const H = canvas.height;
 // Fixed room geometry shared by every room (BoI rooms are uniform).
 const ROOM = {
   x0: 60, y0: 96, x1: W - 60, y1: H - 40,
-  wall: 22, doorHalf: 34, doorDepth: 26,
+  wall: 22, doorHalf: 40, doorDepth: 26,
 };
 const GEO = { x0: ROOM.x0, y0: ROOM.y0, x1: ROOM.x1, y1: ROOM.y1 };
 const CX = (ROOM.x0 + ROOM.x1) / 2;
@@ -366,7 +366,7 @@ function update() {
   // Door transitions (only when cleared)
   if (rs.cleared) {
     for (const dir of ['up', 'down', 'left', 'right']) {
-      if (room.neighbors[dir] && inDoorGap(p.x, p.y, dir, ROOM)) {
+      if (room.neighbors[dir] && inDoorGap(p.x, p.y, dir, ROOM, p.radius)) {
         G.projectiles = [];
         enterRoom(room.neighbors[dir], OPP[dir]);
         break;
@@ -531,6 +531,16 @@ function drawSelect() {
 function pick(arr, rng) {
   if (!arr || arr.length === 0) return null;
   return arr[Math.floor(rng() * arr.length)];
+}
+
+// Fullscreen toggle for the gameplay view.
+const fsBtn = document.getElementById('fsBtn');
+if (fsBtn) {
+  fsBtn.addEventListener('click', () => {
+    audio.resume();
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else if (canvas.requestFullscreen) canvas.requestFullscreen();
+  });
 }
 
 // Dev hook: lets tooling/console inspect live state. Harmless in normal play.

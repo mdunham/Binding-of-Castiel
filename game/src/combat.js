@@ -29,11 +29,13 @@ export function unitToward(ax, ay, bx, by) {
  * Is a point within an open door gap on a given wall?
  * Doors are centered on each wall. `half` is half the gap width.
  */
-export function inDoorGap(px, py, dir, room) {
+export function inDoorGap(px, py, dir, room, radius = 0) {
   const cx = (room.x0 + room.x1) / 2;
   const cy = (room.y0 + room.y1) / 2;
   const half = room.doorHalf;
-  const tol = room.doorDepth; // how close to the wall counts as "in the doorway"
+  // A clamped circle's center only reaches `wall - radius`, so the doorway
+  // tolerance must include the radius or large characters can never trigger it.
+  const tol = room.doorDepth + radius;
   switch (dir) {
     case 'up': return Math.abs(px - cx) < half && py < room.y0 + tol;
     case 'down': return Math.abs(px - cx) < half && py > room.y1 - tol;

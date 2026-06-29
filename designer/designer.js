@@ -104,7 +104,7 @@ document.querySelectorAll('.tab').forEach((t) => {
     document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
     t.classList.add('active');
     state.tab = t.dataset.tab;
-    state.selectedId = null;
+    selectedRef = null; state.selectedId = null;
     renderAll();
   };
 });
@@ -114,7 +114,7 @@ async function reloadFromServer() {
     const res = await fetch('../content.json', { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     state.data = normalize(await res.json());
-    state.selectedId = null;
+    selectedRef = null; state.selectedId = null;
     renderAll();
   } catch (e) {
     errorsEl.textContent = `Could not load content.json from server (${e.message}). `
@@ -137,7 +137,7 @@ function onFilePicked(e) {
   reader.onload = () => {
     try {
       state.data = normalize(JSON.parse(reader.result));
-      state.selectedId = null;
+      selectedRef = null; state.selectedId = null;
       renderAll();
       toast('Loaded');
     } catch (err) { errorsEl.textContent = `Invalid JSON: ${err.message}`; }
@@ -152,14 +152,21 @@ function collection() {
   if (state.tab === 'items') return state.data.items;
   return state.data.characters;
 }
-const selected = () => collection().find((x) => x.id === state.selectedId) || null;
+// Selection tracks the object directly so editing an item's id (or a duplicate
+// id existing elsewhere) never breaks the link the sprite editor writes through.
+let selectedRef = null;
+function selectItem(item) { selectedRef = item; state.selectedId = item ? item.id : null; renderAll(); }
+function selected() {
+  if (selectedRef && collection().includes(selectedRef)) return selectedRef;
+  selectedRef = collection().find((x) => x.id === state.selectedId) || null;
+  return selectedRef;
+}
 
 function onAdd() {
   const item = state.tab === 'characters' ? DEFAULT_CHAR()
     : state.tab === 'weapons' ? DEFAULT_WEAPON() : DEFAULT_ITEM();
   collection().push(item);
-  state.selectedId = item.id;
-  renderAll();
+  selectItem(item);
 }
 
 function onDuplicate() {
@@ -169,16 +176,14 @@ function onDuplicate() {
   copy.id = uniqueId(cur.id + '-copy');
   copy.name = (cur.name || cur.id) + ' (copy)';
   collection().push(copy);
-  state.selectedId = copy.id;
-  renderAll();
+  selectItem(copy);
 }
 
 function onDelete() {
   const arr = collection();
   const i = arr.findIndex((x) => x.id === state.selectedId);
   if (i >= 0) arr.splice(i, 1);
-  state.selectedId = null;
-  renderAll();
+  selectItem(null);
 }
 
 // ---- save ----------------------------------------------------------------
@@ -244,7 +249,7 @@ function renderList() {
       tag.textContent = item.role;
       div.appendChild(tag);
     }
-    div.onclick = () => { state.selectedId = item.id; renderAll(); };
+    div.onclick = () => selectItem(item);
     listItems.appendChild(div);
   }
 }
@@ -413,6 +418,7 @@ function setupSpriteEditor() {
     const item = selected();
     if (!item) return;
     const rect = c.getBoundingClientRect();
+    if (!rect.width || !rect.height) return; // canvas not laid out yet
     const x = Math.floor(((ev.clientX - rect.left) / rect.width) * GRID);
     const y = Math.floor(((ev.clientY - rect.top) / rect.height) * GRID);
     if (x < 0 || y < 0 || x >= GRID || y >= GRID) return;

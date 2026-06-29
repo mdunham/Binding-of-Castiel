@@ -39,6 +39,15 @@ export function run() {
     ok(!inDoorGap(cx, (room.y0 + room.y1) / 2, 'up', room), 'middle of room not in doorway');
   });
 
+  test('door trigger is radius-aware (large characters can pass)', () => {
+    const cx = (room.x0 + room.x1) / 2;
+    const radius = 28; // bigger than doorDepth (26)
+    // A radius-28 player clamps to the wall at y = y1 - radius and must still trigger.
+    const clampedY = room.y1 - radius;
+    ok(!inDoorGap(cx, clampedY, 'down', room), 'without radius, big char cannot trigger');
+    ok(inDoorGap(cx, clampedY, 'down', room, radius), 'with radius, it triggers');
+  });
+
   test('applyDamage reports death at/under zero', () => {
     const e = { health: 5 };
     ok(!applyDamage(e, 3), 'survives 3 of 5');

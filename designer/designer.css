@@ -31,7 +31,13 @@ button.danger { background: #6b2e2e; }
 .tabs { display: flex; gap: 8px; padding: 12px 20px 0; }
 .tab { padding: 8px 18px; cursor: pointer; border-radius: 6px 6px 0 0; background: var(--panel); color: var(--muted); }
 .tab.active { background: var(--panel2); color: var(--text); }
-main { display: grid; grid-template-columns: 220px 1fr 300px; gap: 16px; padding: 16px 20px; }
+main { display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; gap: 16px; padding: 16px 20px; }
+main > * { min-width: 0; }
+/* Stack the sprite editor below the form on narrower screens so it's always reachable. */
+@media (max-width: 920px) {
+  main { grid-template-columns: 200px minmax(0, 1fr); }
+  .sprite-editor { grid-column: 1 / -1; }
+}
 .list { background: var(--panel); border-radius: 8px; padding: 8px; max-height: 70vh; overflow-y: auto; }
 .list .item {
   padding: 8px 10px; border-radius: 5px; cursor: pointer; display: flex;
