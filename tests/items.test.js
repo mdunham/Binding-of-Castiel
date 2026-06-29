@@ -1,5 +1,5 @@
 import { test, eq, ok, approx } from './run.js';
-import { emptyMods, applyItem, effectiveWeapon, effectiveMoveSpeed } from '../game/src/items.js';
+import { emptyMods, applyItem, effectiveWeapon, effectiveMoveSpeed, luckBonus } from '../game/src/items.js';
 
 export const NAME = 'item effects';
 
@@ -10,6 +10,7 @@ function makePlayer() {
     maxHealth: 6, health: 4,
     mods: emptyMods(),
     items: [],
+    bombs: 1, keys: 0,
   };
 }
 
@@ -68,5 +69,40 @@ export function run() {
   test('effectiveWeapon is null when unarmed', () => {
     const p = makePlayer(); p.weapon = null;
     ok(effectiveWeapon(p) === null);
+  });
+
+  test('damageMult multiplies (base + additive) damage', () => {
+    const p = makePlayer();
+    applyItem(p, { id: 'steroids', effects: { damageMult: 0.5 } });
+    approx(effectiveWeapon(p).damage, 3.5 * 1.5, 1e-9, '+50%');
+    applyItem(p, { id: 'cricket', effects: { damage: 1.5 } });
+    approx(effectiveWeapon(p).damage, (3.5 + 1.5) * 1.5, 1e-9, 'additive then ×');
+  });
+
+  test('piercing and homing flags switch on via items', () => {
+    const p = makePlayer();
+    ok(!effectiveWeapon(p).piercing, 'off by default');
+    ok(!effectiveWeapon(p).homing, 'off by default');
+    applyItem(p, { id: 'cupid', effects: { piercing: 1 } });
+    applyItem(p, { id: 'spoon', effects: { homing: 1 } });
+    ok(effectiveWeapon(p).piercing, 'piercing on');
+    ok(effectiveWeapon(p).homing, 'homing on');
+  });
+
+  test('one-time bomb/key grants add to resource counts', () => {
+    const p = makePlayer(); // bombs 1, keys 0
+    applyItem(p, { id: 'boom', effects: { bombs: 5 } });
+    applyItem(p, { id: 'ring', effects: { keys: 5 } });
+    eq(p.bombs, 6, 'bombs granted');
+    eq(p.keys, 5, 'keys granted');
+  });
+
+  test('luckBonus scales with the luck mod and caps', () => {
+    const p = makePlayer();
+    eq(luckBonus(p), 0, 'no luck -> no bonus');
+    applyItem(p, { id: 'foot', effects: { luck: 2 } });
+    approx(luckBonus(p), 0.16, 1e-9, '2 luck -> +0.16');
+    applyItem(p, { id: 'foot2', effects: { luck: 100 } });
+    ok(luckBonus(p) <= 0.45, 'capped');
   });
 }

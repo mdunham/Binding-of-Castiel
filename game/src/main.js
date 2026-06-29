@@ -7,11 +7,12 @@ import { generateObstacles, clearPoint } from './obstacles.js';
 import { createInput } from './input.js';
 import { spawnEntity, stepEnemy } from './entities.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
-import { applyItem, effectiveMoveSpeed, effectiveWeapon } from './items.js';
+import { applyItem, effectiveMoveSpeed, effectiveWeapon, luckBonus } from './items.js';
 import {
   circlesOverlap, clampToRect, inDoorGap, applyDamage, pointInRect, resolveCircleRects,
 } from './combat.js';
 import { drawSprite } from './sprite.js';
+import * as audio from './audio.js';
 import * as draw from './render.js';
 
 const canvas = document.getElementById('game');
@@ -43,6 +44,7 @@ loadContent('../content.json')
   .catch((err) => { G = { state: 'error', message: err.message }; });
 
 canvas.addEventListener('click', (e) => {
+  audio.resume();
   if (!G || G.state !== 'select') return;
   const rect = canvas.getBoundingClientRect();
   const my = (e.clientY - rect.top) * (H / rect.height);
@@ -52,7 +54,9 @@ canvas.addEventListener('click', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (!G) return;
+  audio.resume();                 // unlock audio on first key
   const k = e.key.toLowerCase();
+  if (k === 'm') { G.muted = audio.toggleMute(); return; }
   if (G.state === 'select') {
     const n = parseInt(e.key, 10);
     if (!Number.isNaN(n) && n >= 1 && n <= content.players.length) {
@@ -75,6 +79,7 @@ function startNewRun(playerDef) {
 
 // Descend: keep the same player (items/stats/bombs/keys persist), new floor.
 function nextFloor() {
+  audio.play('descend');
   buildFloor(G.playerDef, G.floorNum + 1, G.player);
 }
 
@@ -175,7 +180,8 @@ function rollConsumable(rng) {
   return 'key';
 }
 function dropFromEnemy(rng, x, y) {
-  return rng() < 0.28 ? makeConsumable(rollConsumable(rng), x, y) : null;
+  const chance = 0.28 + luckBonus(G.player);
+  return rng() < chance ? makeConsumable(rollConsumable(rng), x, y) : null;
 }
 function randomChestReward(rng) {
   if (rng() < 0.45 && content.items.length) return { kind: 'item', def: pick(content.items, rng) };
@@ -187,6 +193,7 @@ function openChest(chest, rs) {
   if (!rw) { banner('Empty…'); return; }
   if (rw.kind === 'item' && rw.def) rs.pickups.push(makeItemPickup(rw.def, chest.x, chest.y - 6));
   else rs.pickups.push(makeConsumable(rw.kind, chest.x, chest.y - 6));
+  audio.play('chest');
   banner('Chest opened!');
 }
 
@@ -197,10 +204,12 @@ function placeBomb() {
   if (p.bombs <= 0) { banner('No bombs'); return; }
   p.bombs--;
   G.roomState.get(G.currentKey).bombs.push({ x: p.x, y: p.y, fuse: 90 });
+  audio.play('bomb');
 }
 
 function explode(b, rs) {
   const p = G.player;
+  audio.play('explosion');
   rs.explosions.push({ x: b.x, y: b.y, radius: BOMB_RADIUS, life: 18, maxLife: 18 });
   // rocks within blast are destroyed (chance to drop)
   rs.obstacles = rs.obstacles.filter((rk) => {
@@ -256,11 +265,16 @@ function update() {
     const len = Math.hypot(aim.x, aim.y);
     G.projectiles.push(...fireWeapon(eff, p.x, p.y, { x: aim.x / len, y: aim.y / len }, 'player'));
     p.cooldown = cooldownFrames(eff);
+    audio.play('shoot');
   }
 
-  // Enemies
+  // Enemies — move by AI, collide with rocks (unless flying), stay in the room.
   for (const e of rs.enemies) {
     stepEnemy(e, p, G.projectiles);
+    if (!e.flying) {
+      const er = resolveCircleRects(e.x, e.y, e.radius, rs.obstacles);
+      e.x = er.x; e.y = er.y;
+    }
     const ec = clampToRect(e.x, e.y, e.radius, ROOM.x0, ROOM.y0, ROOM.x1, ROOM.y1);
     e.x = ec.x; e.y = ec.y;
     if (p.iframes === 0 && circlesOverlap(p.x, p.y, p.radius, e.x, e.y, e.radius)) {
@@ -270,6 +284,7 @@ function update() {
 
   // Projectiles
   for (const pr of G.projectiles) {
+    if (pr.homing && pr.team === 'player') steerHoming(pr, rs.enemies);
     pr.x += pr.vx; pr.y += pr.vy; pr.life--;
     if (pr.life <= 0 || pr.x < ROOM.x0 || pr.x > ROOM.x1 || pr.y < ROOM.y0 || pr.y > ROOM.y1) {
       pr.dead = true; continue;
@@ -281,8 +296,9 @@ function update() {
         if (circlesOverlap(pr.x, pr.y, pr.radius, e.x, e.y, e.radius)) {
           if (applyDamage(e, pr.damage)) {
             e.dead = true;
+            audio.play('enemyDie');
             if (e.role !== 'boss') { const d = dropFromEnemy(G.rng, e.x, e.y); if (d) rs.pickups.push(d); }
-          }
+          } else audio.play('hit');
           if (!pr.piercing) { pr.dead = true; break; }
         }
       }
@@ -312,7 +328,7 @@ function update() {
     if (circlesOverlap(p.x, p.y, p.radius, ch.x, ch.y, 18)) {
       if (ch.locked) {
         if (p.keys > 0) { p.keys--; openChest(ch, rs); }
-        else banner('Locked — need a key (or bomb it)');
+        else { banner('Locked — need a key (or bomb it)'); audio.play('locked'); }
       } else openChest(ch, rs);
     }
   }
@@ -321,13 +337,13 @@ function update() {
   for (const pk of rs.pickups) {
     if (!circlesOverlap(p.x, p.y, p.radius, pk.x, pk.y, pk.radius)) continue;
     if (pk.kind === 'heart') {
-      if (p.health < p.maxHealth) { p.health = Math.min(p.maxHealth, p.health + 2); pk.taken = true; banner('+ Heart'); }
+      if (p.health < p.maxHealth) { p.health = Math.min(p.maxHealth, p.health + 2); pk.taken = true; banner('+ Heart'); audio.play('pickup'); }
     } else if (pk.kind === 'bomb') {
-      p.bombs++; pk.taken = true; banner('+ Bomb');
+      p.bombs++; pk.taken = true; banner('+ Bomb'); audio.play('pickup');
     } else if (pk.kind === 'key') {
-      p.keys++; pk.taken = true; banner('+ Key');
+      p.keys++; pk.taken = true; banner('+ Key'); audio.play('key');
     } else {
-      applyItem(p, pk.item); pk.taken = true; banner(`Picked up: ${pk.item.name}`);
+      applyItem(p, pk.item); pk.taken = true; banner(`Picked up: ${pk.item.name}`); audio.play('item');
     }
   }
   rs.pickups = rs.pickups.filter((pk) => !pk.taken);
@@ -341,6 +357,9 @@ function update() {
       const reward = pick(content.items, G.rng);
       if (reward) rs.pickups.push(makeItemPickup(reward, CX, CY + 40));
       banner('BOSS DEFEATED!');
+      audio.play('boss');
+    } else {
+      audio.play('clear');
     }
   }
 
@@ -362,6 +381,24 @@ function damagePlayer(amount) {
   const p = G.player;
   applyDamage(p, amount);
   p.iframes = 48;
+  audio.play('hurt');
+}
+
+// Gently curve a homing projectile toward the nearest enemy, keeping its speed.
+function steerHoming(pr, enemies) {
+  let best = null, bd = Infinity;
+  for (const e of enemies) {
+    if (e.dead) continue;
+    const d = Math.hypot(e.x - pr.x, e.y - pr.y);
+    if (d < bd) { bd = d; best = e; }
+  }
+  if (!best || bd < 1) return;
+  const sp = Math.hypot(pr.vx, pr.vy) || 1;
+  pr.vx += ((best.x - pr.x) / bd) * 0.6;
+  pr.vy += ((best.y - pr.y) / bd) * 0.6;
+  const ns = Math.hypot(pr.vx, pr.vy) || 1;
+  pr.vx = (pr.vx / ns) * sp;
+  pr.vy = (pr.vy / ns) * sp;
 }
 
 function banner(text) { G.banner = { text, until: tick + 120 }; }
@@ -410,6 +447,9 @@ function drawPlay() {
   // HUD
   draw.drawHearts(ctx, G.player, 24, 28);
   draw.drawResources(ctx, G.player, 24, 80);
+  ctx.fillStyle = '#6f6480'; ctx.font = '11px monospace'; ctx.textAlign = 'right';
+  ctx.fillText(audio.isMuted() ? '🔇 muted (M)' : '🔊 sound (M)', W - 24, H - 14);
+  ctx.textAlign = 'left';
   const eff = effectiveWeapon(G.player) || { damage: 0, fireRate: 0 };
   ctx.fillStyle = '#c9bcd8';
   ctx.font = '13px monospace';

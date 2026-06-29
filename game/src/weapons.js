@@ -26,6 +26,7 @@ export function fireWeapon(weapon, x, y, dir, team) {
       color: weapon.color,
       life: weapon.range,           // frames remaining
       piercing: !!weapon.piercing,
+      homing: !!weapon.homing,
       team,
       dead: false,
     });

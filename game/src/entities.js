@@ -21,6 +21,7 @@ export function spawnEntity(def, x, y, weapons) {
     moveSpeed: def.moveSpeed,
     role: def.role,
     ai: def.ai || null,
+    flying: !!def.flying,
     contactDamage: def.contactDamage || 0,
     weapon,
     cooldown: 0,

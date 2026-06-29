@@ -24,7 +24,8 @@ const charFields = (role) => ({
   weaponId: { type: 'weaponRef', label: 'Weapon' },
   ...(role === 'enemy' || role === 'boss'
     ? { ai: { type: 'select', label: 'AI', options: ['chase', 'wander', 'shooter'] },
-        contactDamage: NUM('Contact Damage (half-hearts)', 0, 20) }
+        contactDamage: NUM('Contact Damage (half-hearts)', 0, 20),
+        flying: { type: 'bool', label: 'Flying (ignores rocks)' } }
     : {}),
 });
 const weaponFields = {
@@ -41,9 +42,12 @@ const weaponFields = {
   piercing: { type: 'bool', label: 'Piercing' },
 };
 const EFFECTS = [
-  ['damage', '+ Damage'], ['fireRate', '+ Fire rate'], ['moveSpeed', '+ Move speed'],
+  ['damage', '+ Damage'], ['damageMult', '× Damage bonus (0.5 = +50%)'],
+  ['fireRate', '+ Fire rate'], ['moveSpeed', '+ Move speed'],
   ['maxHealth', '+ Max HP (half-hearts)'], ['shotCount', '+ Shots'],
   ['projectileSpeed', '+ Shot speed'], ['range', '+ Range'], ['spread', '+ Spread'],
+  ['piercing', 'Piercing (1 = on)'], ['homing', 'Homing (1 = on)'], ['luck', '+ Luck (more drops)'],
+  ['bombs', '+ Bombs (one-time)'], ['keys', '+ Keys (one-time)'],
 ];
 function itemFields() {
   const f = {
