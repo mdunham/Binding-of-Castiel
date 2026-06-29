@@ -1,13 +1,13 @@
-// main.js — game loop + state machine. Ties content, floor, entities, render together.
+// main.js — game loop + state machine. Ties content, floor, entities, items together.
 
 import { loadContent } from './content.js';
 import { generateFloor, makeRng } from './floor.js';
 import { createInput } from './input.js';
 import { spawnEntity, stepEnemy } from './entities.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
-import {
-  circlesOverlap, clampToRect, inDoorGap, applyDamage,
-} from './combat.js';
+import { applyItem, effectiveMoveSpeed, effectiveWeapon } from './items.js';
+import { circlesOverlap, clampToRect, inDoorGap, applyDamage } from './combat.js';
+import { drawSprite } from './sprite.js';
 import * as draw from './render.js';
 
 const canvas = document.getElementById('game');
@@ -20,11 +20,14 @@ const ROOM = {
   x0: 60, y0: 96, x1: W - 60, y1: H - 40,
   wall: 22, doorHalf: 34, doorDepth: 26,
 };
+const CX = (ROOM.x0 + ROOM.x1) / 2;
+const CY = (ROOM.y0 + ROOM.y1) / 2;
 
 const input = createInput(window);
 let content = null;
 let G = null;            // active game state
 let seedCounter = 1234;  // bumped each new floor for variety
+let tick = 0;            // global frame counter (for bobbing/animation)
 
 const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
 
@@ -38,7 +41,7 @@ canvas.addEventListener('click', (e) => {
   const rect = canvas.getBoundingClientRect();
   const my = (e.clientY - rect.top) * (H / rect.height);
   const idx = playerCardIndexAt(my);
-  if (idx != null && idx < content.players.length) startRun(content.players[idx], 1);
+  if (idx != null && idx < content.players.length) startNewRun(content.players[idx]);
 });
 
 window.addEventListener('keydown', (e) => {
@@ -47,32 +50,35 @@ window.addEventListener('keydown', (e) => {
   if (G.state === 'select') {
     const n = parseInt(e.key, 10);
     if (!Number.isNaN(n) && n >= 1 && n <= content.players.length) {
-      startRun(content.players[n - 1], 1);
+      startNewRun(content.players[n - 1]);
     }
+  } else if (G.state === 'play') {
+    if (k === ' ' && G.bossCleared) nextFloor();
+    else if (k === 'r') startNewRun(G.playerDef);
   } else if (G.state === 'dead') {
-    if (k === 'r') startRun(G.playerDef, 1);
-  } else if (G.state === 'cleared') {
-    if (k === 'r') startRun(G.playerDef, G.floorNum + 1);
+    if (k === 'r') startNewRun(G.playerDef);
   }
 });
 
 // ---- run setup -----------------------------------------------------------
-function startRun(playerDef, floorNum) {
+function startNewRun(playerDef) {
+  const player = spawnEntity(playerDef, CX, CY, content.weapons);
+  buildFloor(playerDef, 1, player);
+}
+
+// Descend: keep the same player (items/stats/health persist), new harder floor.
+function nextFloor() {
+  buildFloor(G.playerDef, G.floorNum + 1, G.player);
+}
+
+function buildFloor(playerDef, floorNum, player) {
   seedCounter += 7;
   const rng = makeRng(seedCounter + floorNum * 101);
-  const roomCount = Math.min(15, 7 + floorNum);
-  const floor = generateFloor(rng, { roomCount });
-
-  const player = spawnEntity(
-    playerDef,
-    (ROOM.x0 + ROOM.x1) / 2,
-    (ROOM.y0 + ROOM.y1) / 2,
-    content.weapons,
-  );
+  const floor = generateFloor(rng, { roomCount: Math.min(15, 7 + floorNum) });
 
   const roomState = new Map();
-  for (const k of floor.rooms.keys()) {
-    roomState.set(k, { visited: false, cleared: false, enemies: [], spawned: false });
+  for (const key of floor.rooms.keys()) {
+    roomState.set(key, { visited: false, cleared: false, spawned: false, enemies: [], pickups: [] });
   }
 
   G = {
@@ -82,6 +88,8 @@ function startRun(playerDef, floorNum) {
     player,
     projectiles: [],
     rng,
+    bossCleared: false,
+    banner: null,       // { text, until }
   };
   enterRoom(floor.start, null);
 }
@@ -97,10 +105,14 @@ function enterRoom(key, fromDir) {
     rs.spawned = true;
     if (room.type === 'start') {
       rs.cleared = true;
+    } else if (room.type === 'treasure') {
+      rs.cleared = true;
+      const item = pick(content.items, G.rng);
+      if (item) rs.pickups.push(makeItemPickup(item, CX, CY));
     } else if (room.type === 'boss') {
       const boss = pick(content.bosses, G.rng) || pick(content.enemies, G.rng);
       if (boss) {
-        const e = spawnEntity(boss, (ROOM.x0 + ROOM.x1) / 2, ROOM.y0 + 90, content.weapons);
+        const e = spawnEntity(boss, CX, ROOM.y0 + 90, content.weapons);
         scaleForFloor(e, G.floorNum);
         rs.enemies.push(e);
       } else rs.cleared = true;
@@ -119,21 +131,25 @@ function enterRoom(key, fromDir) {
   }
 
   // Place the player just inside the door they came through.
-  const r = ROOM;
-  const cx = (r.x0 + r.x1) / 2;
-  const cy = (r.y0 + r.y1) / 2;
-  const inset = G.player.radius + r.doorDepth + 4;
-  if (fromDir === 'up') { G.player.x = cx; G.player.y = r.y0 + inset; }
-  else if (fromDir === 'down') { G.player.x = cx; G.player.y = r.y1 - inset; }
-  else if (fromDir === 'left') { G.player.x = r.x0 + inset; G.player.y = cy; }
-  else if (fromDir === 'right') { G.player.x = r.x1 - inset; G.player.y = cy; }
-  else { G.player.x = cx; G.player.y = cy; }
+  const inset = G.player.radius + ROOM.doorDepth + 4;
+  if (fromDir === 'up') { G.player.x = CX; G.player.y = ROOM.y0 + inset; }
+  else if (fromDir === 'down') { G.player.x = CX; G.player.y = ROOM.y1 - inset; }
+  else if (fromDir === 'left') { G.player.x = ROOM.x0 + inset; G.player.y = CY; }
+  else if (fromDir === 'right') { G.player.x = ROOM.x1 - inset; G.player.y = CY; }
+  else { G.player.x = CX; G.player.y = CY; }
 }
 
 function scaleForFloor(e, floorNum) {
   const mult = 1 + 0.18 * (floorNum - 1);
   e.maxHealth = Math.round(e.maxHealth * mult);
   e.health = e.maxHealth;
+}
+
+function makeItemPickup(item, x, y) {
+  return { kind: 'item', item, sprite: item.sprite || null, color: item.color, x, y, radius: 13 };
+}
+function makeHeartPickup(x, y) {
+  return { kind: 'heart', x, y, radius: 11 };
 }
 
 // ---- update --------------------------------------------------------------
@@ -143,22 +159,24 @@ function update() {
   const rs = G.roomState.get(G.currentKey);
   const room = G.floor.rooms.get(G.currentKey);
 
-  // Movement
+  // Movement (item-modified speed).
+  const speed = effectiveMoveSpeed(p);
   const mv = input.moveVector();
   const mlen = Math.hypot(mv.x, mv.y) || 1;
-  p.x += (mv.x / mlen) * p.moveSpeed;
-  p.y += (mv.y / mlen) * p.moveSpeed;
+  p.x += (mv.x / mlen) * speed;
+  p.y += (mv.y / mlen) * speed;
   const c = clampToRect(p.x, p.y, p.radius, ROOM.x0, ROOM.y0, ROOM.x1, ROOM.y1);
   p.x = c.x; p.y = c.y;
   if (p.iframes > 0) p.iframes--;
   if (p.cooldown > 0) p.cooldown--;
 
-  // Shooting (twin-stick)
+  // Shooting (item-modified weapon).
   const aim = input.aimVector();
-  if ((aim.x || aim.y) && p.weapon && p.cooldown === 0) {
+  const eff = effectiveWeapon(p);
+  if ((aim.x || aim.y) && eff && p.cooldown === 0) {
     const len = Math.hypot(aim.x, aim.y);
-    G.projectiles.push(...fireWeapon(p.weapon, p.x, p.y, { x: aim.x / len, y: aim.y / len }, 'player'));
-    p.cooldown = cooldownFrames(p.weapon);
+    G.projectiles.push(...fireWeapon(eff, p.x, p.y, { x: aim.x / len, y: aim.y / len }, 'player'));
+    p.cooldown = cooldownFrames(eff);
   }
 
   // Enemies
@@ -166,7 +184,6 @@ function update() {
     stepEnemy(e, p, G.projectiles);
     const ec = clampToRect(e.x, e.y, e.radius, ROOM.x0, ROOM.y0, ROOM.x1, ROOM.y1);
     e.x = ec.x; e.y = ec.y;
-    // contact damage
     if (p.iframes === 0 && circlesOverlap(p.x, p.y, p.radius, e.x, e.y, e.radius)) {
       damagePlayer(e.contactDamage || 1);
     }
@@ -182,7 +199,10 @@ function update() {
       for (const e of rs.enemies) {
         if (e.dead) continue;
         if (circlesOverlap(pr.x, pr.y, pr.radius, e.x, e.y, e.radius)) {
-          if (applyDamage(e, pr.damage)) e.dead = true;
+          if (applyDamage(e, pr.damage)) {
+            e.dead = true;
+            if (e.role !== 'boss' && G.rng() < 0.22) rs.pickups.push(makeHeartPickup(e.x, e.y));
+          }
           if (!pr.piercing) { pr.dead = true; break; }
         }
       }
@@ -196,11 +216,30 @@ function update() {
   rs.enemies = rs.enemies.filter((e) => !e.dead);
   G.projectiles = G.projectiles.filter((pr) => !pr.dead);
 
+  // Pickups
+  for (const pk of rs.pickups) {
+    if (circlesOverlap(p.x, p.y, p.radius, pk.x, pk.y, pk.radius)) {
+      if (pk.kind === 'heart') {
+        if (p.health < p.maxHealth) { p.health = Math.min(p.maxHealth, p.health + 2); pk.taken = true; banner('+ Heart'); }
+      } else {
+        applyItem(p, pk.item);
+        pk.taken = true;
+        banner(`Picked up: ${pk.item.name}`);
+      }
+    }
+  }
+  rs.pickups = rs.pickups.filter((pk) => !pk.taken);
+
   // Room cleared?
   if (!rs.cleared && rs.enemies.length === 0) {
     rs.cleared = true;
     G.projectiles = G.projectiles.filter((pr) => pr.team === 'player');
-    if (room.type === 'boss') { G.state = 'cleared'; return; }
+    if (room.type === 'boss') {
+      G.bossCleared = true;
+      const reward = pick(content.items, G.rng);
+      if (reward) rs.pickups.push(makeItemPickup(reward, CX, CY + 40));
+      banner('BOSS DEFEATED!');
+    }
   }
 
   // Door transitions (only when cleared)
@@ -223,8 +262,11 @@ function damagePlayer(amount) {
   p.iframes = 48;
 }
 
+function banner(text) { G.banner = { text, until: tick + 120 }; }
+
 // ---- render --------------------------------------------------------------
 function frame() {
+  tick++;
   update();
   draw.clear(ctx, W, H);
   if (!G) { requestAnimationFrame(frame); return; }
@@ -242,14 +284,8 @@ function frame() {
     if (G.state === 'dead') {
       draw.drawCenterText(ctx, W, H, [
         { text: 'YOU DIED', color: '#e74c3c', font: 'bold 34px monospace' },
-        { text: `Floor ${G.floorNum}`, font: '16px monospace' },
-        { text: 'Press R to try again', font: '16px monospace' },
-      ]);
-    } else if (G.state === 'cleared') {
-      draw.drawCenterText(ctx, W, H, [
-        { text: 'FLOOR CLEARED!', color: '#7ed957', font: 'bold 34px monospace' },
-        { text: `Boss down on floor ${G.floorNum}`, font: '16px monospace' },
-        { text: 'Press R to descend to the next floor', font: '16px monospace' },
+        { text: `Floor ${G.floorNum} • ${G.player.items.length} items collected`, font: '16px monospace' },
+        { text: 'Press R to start a new run', font: '16px monospace' },
       ]);
     }
   }
@@ -260,22 +296,44 @@ function drawPlay() {
   const room = G.floor.rooms.get(G.currentKey);
   const rs = G.roomState.get(G.currentKey);
   draw.drawRoom(ctx, ROOM, room.neighbors, rs.cleared);
+  for (const pk of rs.pickups) draw.drawPickup(ctx, pk, tick);
   for (const pr of G.projectiles) draw.drawProjectile(ctx, pr);
   for (const e of rs.enemies) draw.drawEntity(ctx, e, false);
   draw.drawEntity(ctx, G.player, true);
 
   // HUD
   draw.drawHearts(ctx, G.player, 24, 28);
+  const eff = effectiveWeapon(G.player) || { damage: 0, fireRate: 0 };
   ctx.fillStyle = '#c9bcd8';
   ctx.font = '13px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText(`${G.playerDef.name}  •  ${G.player.weapon ? G.player.weapon.name : 'Unarmed'}  •  Floor ${G.floorNum}`, 24, 60);
-  if (G.floor.rooms.get(G.currentKey).type === 'boss' && !rs.cleared) {
-    ctx.fillStyle = '#e74c3c';
-    ctx.textAlign = 'center';
-    ctx.fillText('— BOSS —', W / 2, 84);
-    ctx.textAlign = 'left';
+  ctx.fillText(
+    `${G.playerDef.name}  •  ${G.player.weapon ? G.player.weapon.name : 'Unarmed'}  •  `
+    + `DMG ${eff.damage.toFixed(1)}  RATE ${eff.fireRate.toFixed(1)}  SPD ${effectiveMoveSpeed(G.player).toFixed(1)}`
+    + `  •  Items ${G.player.items.length}  •  Floor ${G.floorNum}`,
+    24, 60,
+  );
+
+  if (room.type === 'boss' && !rs.cleared) {
+    ctx.fillStyle = '#e74c3c'; ctx.textAlign = 'center';
+    ctx.fillText('— BOSS —', W / 2, 84); ctx.textAlign = 'left';
+  } else if (room.type === 'treasure') {
+    ctx.fillStyle = '#d8c84a'; ctx.textAlign = 'center';
+    ctx.fillText('✦ TREASURE ✦', W / 2, 84); ctx.textAlign = 'left';
   }
+
+  // Banner (pickups / boss / descend prompt)
+  ctx.textAlign = 'center';
+  if (G.bossCleared) {
+    ctx.fillStyle = '#7ed957'; ctx.font = '15px monospace';
+    ctx.fillText('Boss defeated — grab your reward, then press SPACE to descend', W / 2, H - 16);
+  }
+  if (G.banner && tick < G.banner.until) {
+    ctx.fillStyle = '#ffe08a'; ctx.font = 'bold 16px monospace';
+    ctx.fillText(G.banner.text, W / 2, 108);
+  }
+  ctx.textAlign = 'left';
+
   draw.drawMinimap(ctx, G.floor, G.roomState, G.currentKey, W - 150, 18);
 }
 
@@ -297,18 +355,18 @@ function drawSelect() {
   ctx.fillText('CHOOSE YOUR CHARACTER', W / 2, 90);
   ctx.font = '13px monospace';
   ctx.fillStyle = '#a99cb8';
-  ctx.fillText('Click a character or press its number. WASD move • Arrows shoot', W / 2, 118);
+  ctx.fillText('Click a character or press its number. WASD move • Arrows shoot • items & treasure await', W / 2, 118);
 
   content.players.forEach((pd, i) => {
     const y = CARD.top + i * (CARD.height + CARD.gap);
     ctx.fillStyle = '#2b2330';
     ctx.fillRect(CARD.left, y, CARD.width, CARD.height);
-    // avatar
-    ctx.beginPath();
-    ctx.arc(CARD.left + 45, y + CARD.height / 2, pd.size + 6, 0, Math.PI * 2);
-    ctx.fillStyle = pd.color;
-    ctx.fill();
-    // text
+    // avatar: sprite if present, else blob
+    const ax = CARD.left + 45, ay = y + CARD.height / 2;
+    if (!drawSprite(ctx, pd.sprite, ax, ay, (pd.size + 6) * 2)) {
+      ctx.beginPath(); ctx.arc(ax, ay, pd.size + 6, 0, Math.PI * 2);
+      ctx.fillStyle = pd.color; ctx.fill();
+    }
     ctx.textAlign = 'left';
     ctx.fillStyle = '#f0e6f5';
     ctx.font = 'bold 20px monospace';
@@ -332,13 +390,12 @@ function pick(arr, rng) {
 
 function randomRoomPoint(rng, radius) {
   const pad = radius + 20;
-  // Avoid spawning right on the player's entry point (room center).
   let x, y, tries = 0;
   do {
     x = ROOM.x0 + pad + rng() * (ROOM.x1 - ROOM.x0 - 2 * pad);
     y = ROOM.y0 + pad + rng() * (ROOM.y1 - ROOM.y0 - 2 * pad);
     tries++;
-  } while (tries < 8 && Math.hypot(x - (ROOM.x0 + ROOM.x1) / 2, y - (ROOM.y0 + ROOM.y1) / 2) < 90);
+  } while (tries < 8 && Math.hypot(x - CX, y - CY) < 90);
   return { x, y };
 }
 

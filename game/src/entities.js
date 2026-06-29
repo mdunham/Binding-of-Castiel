@@ -2,6 +2,7 @@
 
 import { unitToward } from './combat.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
+import { emptyMods } from './items.js';
 
 let nextId = 1;
 
@@ -14,6 +15,7 @@ export function spawnEntity(def, x, y, weapons) {
     x, y,
     radius: def.size,
     color: def.color,
+    sprite: def.sprite || null,
     health: def.maxHealth,
     maxHealth: def.maxHealth,
     moveSpeed: def.moveSpeed,
@@ -25,6 +27,9 @@ export function spawnEntity(def, x, y, weapons) {
     wanderAngle: Math.random() * Math.PI * 2,
     iframes: 0,
     dead: false,
+    // Player-only run state (harmless on enemies):
+    mods: emptyMods(),
+    items: [],
   };
 }
 

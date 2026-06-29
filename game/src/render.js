@@ -1,5 +1,7 @@
 // render.js — all canvas drawing. Stateless: every function takes ctx + data.
 
+import { drawSprite } from './sprite.js';
+
 const WALL = '#2b2330';
 const FLOOR_COLOR = '#4a3f55';
 const DOOR_OPEN = '#7a6a55';
@@ -40,22 +42,23 @@ function doorRect(ctx, x, y, w, h, color) {
   ctx.fillRect(x, y, w, h);
 }
 
-/** Draw an entity as a colored circle, with a health bar for non-player units. */
+/** Draw an entity: its pixel sprite if it has one, else a colored blob. */
 export function drawEntity(ctx, e, isPlayer) {
-  if (e.iframes > 0 && Math.floor(e.iframes / 4) % 2 === 0) {
-    // flicker while invincible
-  } else {
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
-    ctx.fillStyle = e.color;
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.stroke();
-    // simple "eyes" so facing reads as a creature
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.beginPath(); ctx.arc(e.x - e.radius * 0.3, e.y - e.radius * 0.15, 2, 0, 7); ctx.fill();
-    ctx.beginPath(); ctx.arc(e.x + e.radius * 0.3, e.y - e.radius * 0.15, 2, 0, 7); ctx.fill();
+  const hidden = e.iframes > 0 && Math.floor(e.iframes / 4) % 2 === 0;
+  if (!hidden) {
+    // Sprite spans the entity diameter (+ a little so it reads at small sizes).
+    if (!drawSprite(ctx, e.sprite, e.x, e.y, e.radius * 2.2)) {
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+      ctx.fillStyle = e.color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.beginPath(); ctx.arc(e.x - e.radius * 0.3, e.y - e.radius * 0.15, 2, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(e.x + e.radius * 0.3, e.y - e.radius * 0.15, 2, 0, 7); ctx.fill();
+    }
   }
   if (!isPlayer && e.health < e.maxHealth) {
     const w = e.radius * 2;
@@ -74,6 +77,25 @@ export function drawProjectile(ctx, p) {
   ctx.fill();
 }
 
+/** Draw a world pickup (heart or item-on-pedestal) with a gentle bob. */
+export function drawPickup(ctx, pk, t) {
+  const bob = Math.sin(t / 18 + pk.x) * 3;
+  const y = pk.y + bob;
+  if (pk.kind === 'item') {
+    // pedestal
+    ctx.fillStyle = '#3a3145';
+    ctx.fillRect(pk.x - 12, pk.y + 12, 24, 6);
+    ctx.fillStyle = 'rgba(255,255,200,0.10)';
+    ctx.beginPath(); ctx.arc(pk.x, y, 18, 0, Math.PI * 2); ctx.fill();
+    if (!drawSprite(ctx, pk.sprite, pk.x, y, 26)) {
+      ctx.beginPath(); ctx.arc(pk.x, y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = pk.color || '#dd5'; ctx.fill();
+    }
+  } else {
+    drawHeart(ctx, pk.x, y, 'full', 0.9);
+  }
+}
+
 /** Hearts HUD (half-heart granularity). */
 export function drawHearts(ctx, player, x, y) {
   const containers = Math.ceil(player.maxHealth / 2);
@@ -83,11 +105,12 @@ export function drawHearts(ctx, player, x, y) {
   }
 }
 
-function drawHeart(ctx, x, y, state) {
+function drawHeart(ctx, x, y, state, scale = 1) {
   const empty = '#3a2f3f';
   const red = '#e74c3c';
   ctx.save();
   ctx.translate(x, y);
+  if (scale !== 1) ctx.scale(scale, scale);
   // left + right lobes + bottom point, drawn as two circles + triangle
   const paint = (color, clipHalf) => {
     ctx.fillStyle = color;
@@ -100,9 +123,10 @@ function drawHeart(ctx, x, y, state) {
     ctx.moveTo(-9.5, -1); ctx.lineTo(9.5, -1); ctx.lineTo(0, 11); ctx.closePath();
     ctx.fill();
   };
+  const reset = () => { ctx.restore(); ctx.save(); ctx.translate(x, y); if (scale !== 1) ctx.scale(scale, scale); };
   paint(empty, false);
-  if (state === 'full') { ctx.restore(); ctx.save(); ctx.translate(x, y); paint(red, false); }
-  else if (state === 'half') { ctx.restore(); ctx.save(); ctx.translate(x, y); paint(red, true); }
+  if (state === 'full') { reset(); paint(red, false); }
+  else if (state === 'half') { reset(); paint(red, true); }
   ctx.restore();
 }
 
@@ -118,6 +142,7 @@ export function drawMinimap(ctx, floor, roomState, currentKey, originX, originY)
     const py = originY + room.y * (cell + gap);
     let color = '#5a4f64';
     if (room.type === 'boss') color = visited ? '#b84a5a' : '#7a3a44';
+    else if (room.type === 'treasure') color = visited ? '#c8b04a' : '#7a6a2a';
     else if (room.type === 'start') color = '#4a7a5a';
     else if (visited) color = '#8a7f94';
     ctx.fillStyle = color;

@@ -20,6 +20,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="characters">Characters &amp; Enemies</div>
     <div class="tab" data-tab="weapons">Weapons</div>
+    <div class="tab" data-tab="items">Items</div>
   </div>
 
   <div id="errors" class="errors"></div>
@@ -34,9 +35,17 @@
       <div class="empty">Select an item, or click “+ New”.</div>
     </div>
 
-    <div class="preview">
-      <h3>PREVIEW</h3>
-      <canvas id="previewCanvas" width="240" height="240"></canvas>
+    <div class="sprite-editor">
+      <h3>SPRITE · 16×16</h3>
+      <canvas id="spriteGrid" width="256" height="256"></canvas>
+      <div id="palette" class="palette"></div>
+      <div class="sprite-tools">
+        <label class="pickwrap">Color <input type="color" id="paintColor" value="#e8d8b0" /></label>
+        <button id="eraserBtn" title="Erase to transparent">Eraser</button>
+        <button id="clearSprite" class="danger">Clear</button>
+      </div>
+      <h3 style="margin-top:14px;">IN-GAME PREVIEW</h3>
+      <canvas id="previewCanvas" width="260" height="150"></canvas>
     </div>
   </main>
 

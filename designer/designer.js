@@ -1,11 +1,13 @@
-// designer.js — vanilla editor for content.json (characters/enemies + weapons).
-// Reuses the game's validateContent so the editor and game agree on validity.
+// designer.js — vanilla editor for content.json (characters/enemies, weapons, items)
+// with a built-in 16x16 pixel-art sprite editor. Reuses the game's validateContent
+// and parseSprite so the editor and game agree on format + validity.
 
 import { validateContent } from '../game/src/content.js';
+import { parseSprite } from '../game/src/sprite.js';
 
 const state = {
   tab: 'characters',
-  data: { characters: [], weapons: [] },
+  data: { characters: [], weapons: [], items: [] },
   selectedId: null,
 };
 
@@ -18,7 +20,7 @@ const charFields = (role) => ({
   maxHealth: NUM('Max Health (half-hearts)', 1, 999),
   moveSpeed: NUM('Move Speed', 0, 12),
   size: NUM('Size (radius px)', 4, 60),
-  color: { type: 'color', label: 'Color' },
+  color: { type: 'color', label: 'Color (fallback if no sprite)' },
   weaponId: { type: 'weaponRef', label: 'Weapon' },
   ...(role === 'enemy' || role === 'boss'
     ? { ai: { type: 'select', label: 'AI', options: ['chase', 'wander', 'shooter'] },
@@ -33,11 +35,28 @@ const weaponFields = {
   projectileSpeed: NUM('Projectile Speed', 0.5, 20),
   range: NUM('Range (frames)', 5, 300),
   projectileSize: NUM('Projectile Size', 1, 30),
-  color: { type: 'color', label: 'Color' },
+  color: { type: 'color', label: 'Color (fallback if no sprite)' },
   shotCount: NUM('Shot Count', 1, 12, 1),
   spread: NUM('Spread (deg between shots)', 0, 90),
   piercing: { type: 'bool', label: 'Piercing' },
 };
+const EFFECTS = [
+  ['damage', '+ Damage'], ['fireRate', '+ Fire rate'], ['moveSpeed', '+ Move speed'],
+  ['maxHealth', '+ Max HP (half-hearts)'], ['shotCount', '+ Shots'],
+  ['projectileSpeed', '+ Shot speed'], ['range', '+ Range'], ['spread', '+ Spread'],
+];
+function itemFields() {
+  const f = {
+    id: { type: 'text', label: 'ID (unique, no spaces)' },
+    name: { type: 'text', label: 'Name' },
+    color: { type: 'color', label: 'Color (fallback if no sprite)' },
+    description: { type: 'text', label: 'Description' },
+  };
+  for (const [key, label] of EFFECTS) {
+    f['eff_' + key] = { type: 'number', label, group: 'effects', key, step: 'any' };
+  }
+  return f;
+}
 
 const DEFAULT_CHAR = () => ({
   id: uniqueId('char'), name: 'New Character', role: 'player',
@@ -48,6 +67,9 @@ const DEFAULT_WEAPON = () => ({
   id: uniqueId('weapon'), name: 'New Weapon', damage: 3, fireRate: 2, projectileSpeed: 5,
   range: 55, projectileSize: 6, color: '#9cd2ff', shotCount: 1, spread: 0, piercing: false,
 });
+const DEFAULT_ITEM = () => ({
+  id: uniqueId('item'), name: 'New Item', color: '#d8c84a', description: '', effects: {},
+});
 
 // ---- DOM refs ------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -56,6 +78,8 @@ const formWrap = $('formWrap');
 const errorsEl = $('errors');
 
 // ---- boot ----------------------------------------------------------------
+// setupSpriteEditor() is called at the bottom, after the pixel-editor `let`
+// bindings are initialized (avoids a temporal-dead-zone on gctx).
 reloadFromServer();
 
 $('reloadBtn').onclick = reloadFromServer;
@@ -78,9 +102,7 @@ async function reloadFromServer() {
   try {
     const res = await fetch('../content.json', { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    state.data = await res.json();
-    if (!Array.isArray(state.data.characters)) state.data.characters = [];
-    if (!Array.isArray(state.data.weapons)) state.data.weapons = [];
+    state.data = normalize(await res.json());
     state.selectedId = null;
     renderAll();
   } catch (e) {
@@ -89,17 +111,21 @@ async function reloadFromServer() {
   }
 }
 
+function normalize(d) {
+  return {
+    characters: Array.isArray(d.characters) ? d.characters : [],
+    weapons: Array.isArray(d.weapons) ? d.weapons : [],
+    items: Array.isArray(d.items) ? d.items : [],
+  };
+}
+
 function onFilePicked(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const parsed = JSON.parse(reader.result);
-      state.data = {
-        characters: parsed.characters || [],
-        weapons: parsed.weapons || [],
-      };
+      state.data = normalize(JSON.parse(reader.result));
       state.selectedId = null;
       renderAll();
       toast('Loaded');
@@ -110,11 +136,16 @@ function onFilePicked(e) {
 }
 
 // ---- collections ---------------------------------------------------------
-const collection = () => (state.tab === 'characters' ? state.data.characters : state.data.weapons);
+function collection() {
+  if (state.tab === 'weapons') return state.data.weapons;
+  if (state.tab === 'items') return state.data.items;
+  return state.data.characters;
+}
 const selected = () => collection().find((x) => x.id === state.selectedId) || null;
 
 function onAdd() {
-  const item = state.tab === 'characters' ? DEFAULT_CHAR() : DEFAULT_WEAPON();
+  const item = state.tab === 'characters' ? DEFAULT_CHAR()
+    : state.tab === 'weapons' ? DEFAULT_WEAPON() : DEFAULT_ITEM();
   collection().push(item);
   state.selectedId = item.id;
   renderAll();
@@ -125,7 +156,7 @@ function onDuplicate() {
   if (!cur) return;
   const copy = JSON.parse(JSON.stringify(cur));
   copy.id = uniqueId(cur.id + '-copy');
-  copy.name = cur.name + ' (copy)';
+  copy.name = (cur.name || cur.id) + ' (copy)';
   collection().push(copy);
   state.selectedId = copy.id;
   renderAll();
@@ -147,12 +178,12 @@ function onSave() {
     return;
   }
   errorsEl.textContent = '';
-  const blob = new Blob([JSON.stringify(state.data, null, 2)], { type: 'application/json' });
+  // strip the parse cache the game adds at runtime
+  const clean = JSON.parse(JSON.stringify(state.data, (k, v) => (k === '__parsed' ? undefined : v)));
+  const blob = new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = 'content.json';
-  a.click();
+  a.href = url; a.download = 'content.json'; a.click();
   URL.revokeObjectURL(url);
   toast('Saved content.json — drop it in the project root');
 }
@@ -161,6 +192,7 @@ function onSave() {
 function renderAll() {
   renderList();
   renderForm();
+  loadSpriteToGrid(selected());
   liveValidate();
 }
 
@@ -187,46 +219,56 @@ function renderList() {
   }
 }
 
+function fieldsFor(item) {
+  if (state.tab === 'weapons') return weaponFields;
+  if (state.tab === 'items') return itemFields();
+  return charFields(item.role);
+}
+
 function renderForm() {
   const item = selected();
   if (!item) {
     formWrap.innerHTML = '<div class="empty">Select an item, or click “+ New”.</div>';
     return;
   }
-  const fields = state.tab === 'characters' ? charFields(item.role) : weaponFields;
-
+  const fields = fieldsFor(item);
   formWrap.innerHTML = '';
   const h2 = document.createElement('h2');
-  h2.textContent = state.tab === 'characters' ? 'Edit Character' : 'Edit Weapon';
+  h2.textContent = state.tab === 'weapons' ? 'Edit Weapon'
+    : state.tab === 'items' ? 'Edit Item' : 'Edit Character';
   formWrap.appendChild(h2);
 
   const grid = document.createElement('div');
   grid.className = 'grid2';
   formWrap.appendChild(grid);
-
   for (const [name, spec] of Object.entries(fields)) {
     grid.appendChild(buildField(item, name, spec));
   }
 
   const actions = document.createElement('div');
   actions.className = 'row-actions';
-  actions.innerHTML = '';
-  const dup = mkButton('Duplicate', '', onDuplicate);
-  const del = mkButton('Delete', 'danger', onDelete);
-  actions.appendChild(dup);
-  actions.appendChild(del);
+  actions.appendChild(mkButton('Duplicate', '', onDuplicate));
+  actions.appendChild(mkButton('Delete', 'danger', onDelete));
   formWrap.appendChild(actions);
 }
 
 function buildField(item, name, spec) {
   const wrap = document.createElement('div');
   wrap.className = 'field';
-  if ((name === 'id' || name === 'name') === false) {
-    // keep id/name on their own full-width-ish rows by default grid; fine as is
-  }
   const label = document.createElement('label');
   label.textContent = spec.label;
   wrap.appendChild(label);
+
+  const getVal = () => (spec.group ? (item[spec.group] || {})[spec.key] : item[name]);
+  const setVal = (v) => {
+    if (spec.group) {
+      if (!item[spec.group]) item[spec.group] = {};
+      if (v === 0 || v === '' || v == null) delete item[spec.group][spec.key];
+      else item[spec.group][spec.key] = v;
+    } else {
+      item[name] = v;
+    }
+  };
 
   let el;
   if (spec.type === 'select') {
@@ -237,11 +279,7 @@ function buildField(item, name, spec) {
       if (item[name] === opt) o.selected = true;
       el.appendChild(o);
     }
-    el.onchange = () => {
-      item[name] = el.value;
-      if (name === 'role') ensureRoleFields(item);
-      renderAll();
-    };
+    el.onchange = () => { item[name] = el.value; if (name === 'role') ensureRoleFields(item); renderAll(); };
   } else if (spec.type === 'weaponRef') {
     el = document.createElement('select');
     const none = document.createElement('option');
@@ -267,7 +305,8 @@ function buildField(item, name, spec) {
   } else {
     el = document.createElement('input');
     el.type = spec.type;
-    el.value = item[name] ?? '';
+    const v0 = getVal();
+    el.value = v0 ?? '';
     if (spec.min != null) el.min = spec.min;
     if (spec.max != null) el.max = spec.max;
     if (spec.step != null) el.step = spec.step;
@@ -275,7 +314,7 @@ function buildField(item, name, spec) {
       let v = spec.type === 'number' ? parseFloat(el.value) : el.value;
       if (spec.type === 'number' && Number.isNaN(v)) v = 0;
       const prevId = item.id;
-      item[name] = v;
+      setVal(v);
       if (name === 'id' && state.selectedId === prevId) state.selectedId = v;
       if (name === 'name' || name === 'id') renderList();
       liveValidate();
@@ -297,6 +336,141 @@ function liveValidate() {
   errorsEl.textContent = result.ok ? '' : '⚠ ' + result.errors.join('  •  ');
 }
 
+// ---- pixel-art sprite editor ---------------------------------------------
+const GRID = 16;
+const PRESET = ['#000000', '#ffffff', '#e8d8b0', '#f2a6c2', '#b8a06a', '#6b6b6b', '#3a3a3a',
+  '#c98b8b', '#d98fa0', '#9cd2ff', '#9cffd2', '#c0392b', '#e0494b', '#3a9bdc', '#d8c84a', '#8cc88c'];
+let gridColors = makeEmptyGrid();
+let currentColor = '#e8d8b0';
+let eraser = false;
+let painting = false;
+let gctx = null;
+
+function makeEmptyGrid() {
+  return Array.from({ length: GRID }, () => Array(GRID).fill(null));
+}
+
+function setupSpriteEditor() {
+  const c = $('spriteGrid');
+  gctx = c.getContext('2d');
+
+  // palette
+  const pal = $('palette');
+  const trans = document.createElement('div');
+  trans.className = 'sw transparent';
+  trans.title = 'Transparent (eraser)';
+  trans.onclick = () => { eraser = true; refreshPaletteActive(); $('eraserBtn').classList.add('eraser-on'); };
+  pal.appendChild(trans);
+  for (const col of PRESET) {
+    const sw = document.createElement('div');
+    sw.className = 'sw';
+    sw.style.background = col;
+    sw.dataset.color = col;
+    sw.onclick = () => selectColor(col);
+    pal.appendChild(sw);
+  }
+
+  $('paintColor').oninput = (e) => selectColor(e.target.value);
+  $('eraserBtn').onclick = () => { eraser = !eraser; $('eraserBtn').classList.toggle('eraser-on', eraser); refreshPaletteActive(); };
+  $('clearSprite').onclick = () => {
+    gridColors = makeEmptyGrid();
+    const it = selected();
+    if (it) { delete it.sprite; renderList(); liveValidate(); }
+    drawGrid();
+  };
+
+  const paintFromEvent = (ev) => {
+    const item = selected();
+    if (!item) return;
+    const rect = c.getBoundingClientRect();
+    const x = Math.floor(((ev.clientX - rect.left) / rect.width) * GRID);
+    const y = Math.floor(((ev.clientY - rect.top) / rect.height) * GRID);
+    if (x < 0 || y < 0 || x >= GRID || y >= GRID) return;
+    gridColors[y][x] = eraser ? null : currentColor;
+    drawGrid();
+    serializeGrid();
+  };
+  c.addEventListener('pointerdown', (e) => { painting = true; c.setPointerCapture(e.pointerId); paintFromEvent(e); });
+  c.addEventListener('pointermove', (e) => { if (painting) paintFromEvent(e); });
+  c.addEventListener('pointerup', () => { painting = false; });
+  c.addEventListener('pointerleave', () => { painting = false; });
+
+  selectColor(currentColor);
+  drawGrid();
+}
+
+function selectColor(col) {
+  currentColor = col;
+  eraser = false;
+  $('paintColor').value = col;
+  $('eraserBtn').classList.remove('eraser-on');
+  refreshPaletteActive();
+}
+
+function refreshPaletteActive() {
+  document.querySelectorAll('#palette .sw').forEach((sw) => {
+    sw.classList.toggle('active', !eraser && sw.dataset.color === currentColor);
+  });
+}
+
+function drawGrid() {
+  const size = gctx.canvas.width;
+  const cell = size / GRID;
+  // checker background for transparency
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      const c = gridColors[y][x];
+      if (c) { gctx.fillStyle = c; }
+      else { gctx.fillStyle = (x + y) % 2 ? '#2a2333' : '#322a3d'; }
+      gctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+  // grid lines
+  gctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  gctx.lineWidth = 1;
+  for (let i = 0; i <= GRID; i++) {
+    gctx.beginPath(); gctx.moveTo(i * cell, 0); gctx.lineTo(i * cell, size); gctx.stroke();
+    gctx.beginPath(); gctx.moveTo(0, i * cell); gctx.lineTo(size, i * cell); gctx.stroke();
+  }
+}
+
+function loadSpriteToGrid(item) {
+  gridColors = makeEmptyGrid();
+  if (item && item.sprite) {
+    const parsed = parseSprite(item.sprite);
+    if (parsed) for (const cell of parsed.cells) {
+      if (cell.y < GRID && cell.x < GRID) gridColors[cell.y][cell.x] = cell.color;
+    }
+  }
+  drawGrid();
+}
+
+const PALCHARS = '123456789abcdefghijklmnopqrstuvwxyz';
+function serializeGrid() {
+  const item = selected();
+  if (!item) return;
+  const palette = [];
+  const indexOf = new Map();
+  const rows = [];
+  let any = false;
+  for (let y = 0; y < GRID; y++) {
+    let row = '';
+    for (let x = 0; x < GRID; x++) {
+      const col = gridColors[y][x];
+      if (!col) { row += '.'; continue; }
+      any = true;
+      if (!indexOf.has(col)) { indexOf.set(col, palette.length); palette.push(col); }
+      const idx = indexOf.get(col);
+      row += idx < PALCHARS.length ? PALCHARS[idx] : '.';
+    }
+    rows.push(row);
+  }
+  if (any) item.sprite = { palette, rows };
+  else delete item.sprite;
+  renderList();
+  liveValidate();
+}
+
 // ---- preview animation ---------------------------------------------------
 const pcanvas = $('previewCanvas');
 const pctx = pcanvas.getContext('2d');
@@ -311,27 +485,41 @@ function previewLoop() {
   const cx = pcanvas.width / 2;
   const cy = pcanvas.height / 2;
 
-  if (item && state.tab === 'characters') {
-    drawBlob(item.color, item.size, cx, cy);
+  if (!item) { requestAnimationFrame(previewLoop); return; }
+
+  if (state.tab === 'characters') {
+    drawPreviewActor(item, cx, cy, 40);
     if (item.weaponId) {
       const w = state.data.weapons.find((x) => x.id === item.weaponId);
       if (w) animateWeapon(w, cx, cy);
     }
-  } else if (item && state.tab === 'weapons') {
-    drawBlob('#e8d8b0', 13, cx, cy);
+  } else if (state.tab === 'weapons') {
+    drawPreviewActor({ color: '#e8d8b0' }, cx, cy, 34);
     animateWeapon(item, cx, cy);
+  } else {
+    drawPreviewActor(item, cx, cy, 56);
   }
   requestAnimationFrame(previewLoop);
 }
 
-function drawBlob(color, size, cx, cy) {
+function drawPreviewActor(item, cx, cy, diameter) {
+  if (item.sprite) {
+    const parsed = parseSprite(item.sprite);
+    if (parsed && parsed.cells.length) {
+      const px = diameter / parsed.w;
+      const ox = cx - (parsed.w * px) / 2;
+      const oy = cy - (parsed.h * px) / 2;
+      for (const c of parsed.cells) {
+        pctx.fillStyle = c.color;
+        pctx.fillRect(ox + c.x * px, oy + c.y * px, Math.ceil(px) + 0.5, Math.ceil(px) + 0.5);
+      }
+      return;
+    }
+  }
   pctx.beginPath();
-  pctx.arc(cx, cy, size, 0, Math.PI * 2);
-  pctx.fillStyle = color;
+  pctx.arc(cx, cy, diameter / 3, 0, Math.PI * 2);
+  pctx.fillStyle = item.color || '#888';
   pctx.fill();
-  pctx.fillStyle = 'rgba(0,0,0,0.55)';
-  pctx.beginPath(); pctx.arc(cx - size * 0.3, cy - size * 0.15, 2.2, 0, 7); pctx.fill();
-  pctx.beginPath(); pctx.arc(cx + size * 0.3, cy - size * 0.15, 2.2, 0, 7); pctx.fill();
 }
 
 function animateWeapon(w, cx, cy) {
@@ -339,7 +527,7 @@ function animateWeapon(w, cx, cy) {
   if (frameCount % period === 0) {
     const count = Math.max(1, w.shotCount | 0);
     const spreadRad = (w.spread || 0) * Math.PI / 180;
-    const base = -Math.PI / 2; // upward
+    const base = -Math.PI / 2;
     const start = base - spreadRad * (count - 1) / 2;
     for (let i = 0; i < count; i++) {
       const a = start + spreadRad * i;
@@ -347,7 +535,7 @@ function animateWeapon(w, cx, cy) {
         x: cx, y: cy,
         vx: Math.cos(a) * (w.projectileSpeed || 5),
         vy: Math.sin(a) * (w.projectileSpeed || 5),
-        r: w.projectileSize || 6, color: w.color || '#9cd2ff', life: 50,
+        r: w.projectileSize || 6, color: w.color || '#9cd2ff', life: 40,
       });
     }
   }
@@ -370,7 +558,8 @@ function mkButton(text, cls, fn) {
   return b;
 }
 function uniqueId(base) {
-  const ids = new Set([...(state.data.characters || []), ...(state.data.weapons || [])].map((x) => x.id));
+  const all = [...state.data.characters, ...state.data.weapons, ...state.data.items];
+  const ids = new Set(all.map((x) => x.id));
   let id = base, n = 1;
   while (ids.has(id)) id = `${base}-${n++}`;
   return id;
@@ -387,4 +576,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+// Initialize the pixel editor now that its `let` bindings above are in scope,
+// then kick off the live preview loop.
+setupSpriteEditor();
 requestAnimationFrame(previewLoop);

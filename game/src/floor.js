@@ -76,7 +76,11 @@ export function generateFloor(rng, opts = {}) {
   const bossKey = pickBossRoom(rooms, startKey);
   rooms.get(bossKey).type = 'boss';
 
-  return { rooms, start: startKey, boss: bossKey, gridSize };
+  // A treasure room: another dead-end (preferred) distinct from start and boss.
+  const treasureKey = pickTreasureRoom(rooms, startKey, bossKey);
+  if (treasureKey) rooms.get(treasureKey).type = 'treasure';
+
+  return { rooms, start: startKey, boss: bossKey, treasure: treasureKey, gridSize };
 }
 
 function makeRoom(x, y, type) {
@@ -115,6 +119,20 @@ function pickBossRoom(rooms, startKey) {
     // Prefer dead-ends; among them (or all, as fallback) the farthest from start.
     const score = room.distance + (deadEnd ? 1000 : 0);
     if (score > bestDist) { bestDist = score; best = k; }
+  }
+  return best;
+}
+
+// Prefer a dead-end nearest the start (a cozy side-pocket), avoiding boss/start.
+function pickTreasureRoom(rooms, startKey, bossKey) {
+  let best = null;
+  let bestScore = -Infinity;
+  for (const [k, room] of rooms) {
+    if (k === startKey || k === bossKey) continue;
+    const deadEnd = Object.keys(room.neighbors).length === 1;
+    // Higher score = better. Dead-ends strongly preferred; nearer start preferred.
+    const score = (deadEnd ? 1000 : 0) - room.distance;
+    if (score > bestScore) { bestScore = score; best = k; }
   }
   return best;
 }

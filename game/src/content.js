@@ -26,8 +26,10 @@ export function validateContent(data) {
   }
   const characters = Array.isArray(data.characters) ? data.characters : null;
   const weapons = Array.isArray(data.weapons) ? data.weapons : null;
+  const items = Array.isArray(data.items) ? data.items : (data.items == null ? [] : null);
   if (!characters) errors.push('characters must be an array');
   if (!weapons) errors.push('weapons must be an array');
+  if (items === null) errors.push('items must be an array (or omitted)');
   if (errors.length) return { ok: false, errors };
 
   const weaponIds = new Set();
@@ -44,6 +46,26 @@ export function validateContent(data) {
       }
     }
     if (w.shotCount < 1) errors.push(`weapon "${w.id}" shotCount must be >= 1`);
+    errors.push(...spriteErrors(`weapon "${w.id}"`, w.sprite));
+  });
+
+  const itemIds = new Set();
+  items.forEach((it, i) => {
+    if (!it || typeof it.id !== 'string' || !it.id) {
+      errors.push(`items[${i}] missing string id`);
+      return;
+    }
+    if (itemIds.has(it.id)) errors.push(`duplicate item id "${it.id}"`);
+    itemIds.add(it.id);
+    if (typeof it.name !== 'string') errors.push(`item "${it.id}" needs a name`);
+    if (it.effects != null && typeof it.effects !== 'object') {
+      errors.push(`item "${it.id}" effects must be an object`);
+    } else if (it.effects) {
+      for (const [k, v] of Object.entries(it.effects)) {
+        if (typeof v !== 'number') errors.push(`item "${it.id}" effect ${k} must be a number`);
+      }
+    }
+    errors.push(...spriteErrors(`item "${it.id}"`, it.sprite));
   });
 
   const charIds = new Set();
@@ -79,6 +101,7 @@ export function validateContent(data) {
         errors.push(`character "${c.id}" weaponId "${c.weaponId}" not found`);
       }
     }
+    errors.push(...spriteErrors(`character "${c.id}"`, c.sprite));
   });
 
   if (!hasPlayer) errors.push('content needs at least one role:"player" character');
@@ -86,13 +109,26 @@ export function validateContent(data) {
   return errors.length ? { ok: false, errors } : { ok: true, errors: [], data };
 }
 
+/** Validate an optional sprite object. Lenient: only structural checks. */
+function spriteErrors(label, sprite) {
+  if (sprite == null) return [];
+  const errs = [];
+  if (typeof sprite !== 'object') { errs.push(`${label} sprite must be an object`); return errs; }
+  if (!Array.isArray(sprite.palette)) errs.push(`${label} sprite needs a palette array`);
+  if (!Array.isArray(sprite.rows)) errs.push(`${label} sprite needs a rows array`);
+  return errs;
+}
+
 /** Build quick lookup maps from validated content. */
 export function indexContent(data) {
   const weapons = new Map(data.weapons.map((w) => [w.id, w]));
   const characters = new Map(data.characters.map((c) => [c.id, c]));
+  const items = data.items || [];
   return {
     weapons,
     characters,
+    items,
+    itemsById: new Map(items.map((it) => [it.id, it])),
     players: data.characters.filter((c) => c.role === 'player'),
     enemies: data.characters.filter((c) => c.role === 'enemy'),
     bosses: data.characters.filter((c) => c.role === 'boss'),

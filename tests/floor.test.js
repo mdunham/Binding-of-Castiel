@@ -36,6 +36,15 @@ export function run() {
     }
   });
 
+  test('treasure room, when present, is distinct from start and boss', () => {
+    const floor = generateFloor(makeRng(123), { roomCount: 12 });
+    if (floor.treasure) {
+      ok(floor.treasure !== floor.start, 'treasure != start');
+      ok(floor.treasure !== floor.boss, 'treasure != boss');
+      eq(floor.rooms.get(floor.treasure).type, 'treasure', 'treasure type');
+    }
+  });
+
   test('neighbor links are symmetric', () => {
     const floor = generateFloor(makeRng(99), { roomCount: 11 });
     const opp = { up: 'down', down: 'up', left: 'right', right: 'left' };
