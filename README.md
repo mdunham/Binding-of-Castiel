@@ -28,14 +28,21 @@ node serve.js          # then open the URLs it prints
 
 - **WASD** — move
 - **Arrow keys** — shoot (twin-stick, like Isaac's tears)
-- **R** — restart / descend to the next floor
-- Clear a room's enemies to open its doors; reach and beat the **boss room** to clear the floor.
+- **E** — drop a bomb (destroys rocks, damages enemies, blasts chests open — and hurts you if you're too close)
+- **R** — start a new run
+- **SPACE** — descend to the next floor after beating the boss
+- Clear a room's enemies to open its doors. Rooms have **rock** layouts that block you and your shots.
+- **Chests** hold rewards — gold ones are locked (use a **key**, or bomb them open).
+- Find the **treasure room** (locked chest) and beat the **boss room** to clear the floor.
+- **Items** boost your stats for the run and persist between floors; **hearts/bombs/keys** drop from enemies and rocks.
 
 ## Design content
 
-Open the **designer**, edit characters/enemies and weapons (live preview on the right),
-then **Save content.json** and drop the downloaded file into the project root (replacing
-the existing one). Reload the game and your content is live.
+Open the **designer**, edit characters/enemies, weapons and items, and draw 16×16 pixel
+sprites for each (live preview on the right). When running under `serve.js`, **Save to
+server** writes `content.json` straight to disk — no download/drop step. (**Download** is
+still there as a fallback for when you're not using `serve.js`.) Reload the game and your
+content is live.
 
 - **Characters** have a `role`: `player` (selectable), `enemy`, or `boss`. Enemies/bosses
   add an `ai` (`chase` / `wander` / `shooter`) and `contactDamage`.

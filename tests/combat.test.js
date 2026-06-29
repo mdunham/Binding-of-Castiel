@@ -1,6 +1,7 @@
 import { test, eq, ok, approx } from './run.js';
 import {
   circlesOverlap, clampToRect, unitToward, inDoorGap, applyDamage,
+  pointInRect, circleIntersectsRect, resolveCircleRect, resolveCircleRects,
 } from '../game/src/combat.js';
 
 export const NAME = 'combat helpers';
@@ -43,5 +44,36 @@ export function run() {
     ok(!applyDamage(e, 3), 'survives 3 of 5');
     eq(e.health, 2, 'health reduced');
     ok(applyDamage(e, 2), 'dies at exactly zero');
+  });
+
+  const rect = { x: 100, y: 100, w: 40, h: 40 };
+
+  test('pointInRect', () => {
+    ok(pointInRect(120, 120, rect), 'inside');
+    ok(!pointInRect(90, 120, rect), 'outside left');
+  });
+
+  test('circleIntersectsRect detects edge overlap and clear miss', () => {
+    ok(circleIntersectsRect(95, 120, 8, rect), 'circle straddling left edge');
+    ok(!circleIntersectsRect(80, 120, 8, rect), 'circle clear of the rect');
+  });
+
+  test('resolveCircleRect pushes a circle out along the nearest edge', () => {
+    // Circle overlapping the left edge should be pushed further left (x decreases).
+    const out = resolveCircleRect(105, 120, 10, rect);
+    ok(out.x < 105, 'pushed left out of the rect');
+    ok(!circleIntersectsRect(out.x, out.y, 10, rect), 'no longer overlapping');
+  });
+
+  test('resolveCircleRect leaves a non-overlapping circle unchanged', () => {
+    const out = resolveCircleRect(50, 50, 8, rect);
+    eq(out, { x: 50, y: 50 }, 'unchanged');
+  });
+
+  test('resolveCircleRects clears overlaps against multiple rocks', () => {
+    // Two well-separated rocks; the circle overlaps only the first.
+    const rocks = [rect, { x: 220, y: 100, w: 30, h: 40 }];
+    const out = resolveCircleRects(105, 120, 10, rocks);
+    ok(!rocks.some((r) => circleIntersectsRect(out.x, out.y, 10, r)), 'clear of all rocks');
   });
 }

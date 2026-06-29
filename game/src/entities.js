@@ -30,6 +30,8 @@ export function spawnEntity(def, x, y, weapons) {
     // Player-only run state (harmless on enemies):
     mods: emptyMods(),
     items: [],
+    bombs: 1,
+    keys: 0,
   };
 }
 

@@ -86,6 +86,13 @@ $('reloadBtn').onclick = reloadFromServer;
 $('loadBtn').onclick = () => $('fileInput').click();
 $('fileInput').onchange = onFilePicked;
 $('saveBtn').onclick = onSave;
+$('downloadBtn').onclick = () => {
+  const result = validateContent(state.data);
+  if (!result.ok) { errorsEl.textContent = 'Fix before downloading:\n• ' + result.errors.join('\n• '); return; }
+  const clean = JSON.parse(JSON.stringify(state.data, (k, v) => (k === '__parsed' ? undefined : v)));
+  downloadJson(JSON.stringify(clean, null, 2));
+  toast('Downloaded content.json');
+};
 $('addBtn').onclick = onAdd;
 
 document.querySelectorAll('.tab').forEach((t) => {
@@ -171,7 +178,7 @@ function onDelete() {
 }
 
 // ---- save ----------------------------------------------------------------
-function onSave() {
+async function onSave() {
   const result = validateContent(state.data);
   if (!result.ok) {
     errorsEl.textContent = 'Cannot save — fix these first:\n• ' + result.errors.join('\n• ');
@@ -180,12 +187,31 @@ function onSave() {
   errorsEl.textContent = '';
   // strip the parse cache the game adds at runtime
   const clean = JSON.parse(JSON.stringify(state.data, (k, v) => (k === '__parsed' ? undefined : v)));
-  const blob = new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' });
+  const json = JSON.stringify(clean, null, 2);
+
+  // Prefer writing straight to the server's content.json (when run via serve.js).
+  try {
+    const res = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: json,
+    });
+    if (res.ok) { toast('Saved to server ✓ content.json updated'); return; }
+    const info = await res.json().catch(() => ({}));
+    throw new Error(info.error || `HTTP ${res.status}`);
+  } catch (err) {
+    // Fall back to a download (e.g. opened from file:// or a static server).
+    downloadJson(json);
+    toast(`Server save unavailable (${err.message}) — downloaded instead`);
+  }
+}
+
+function downloadJson(json) {
+  const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = 'content.json'; a.click();
   URL.revokeObjectURL(url);
-  toast('Saved content.json — drop it in the project root');
 }
 
 // ---- rendering -----------------------------------------------------------

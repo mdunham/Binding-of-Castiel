@@ -38,7 +38,7 @@ export function approx(actual, expected, tol, msg) {
 async function main() {
   const suites = [
     './content.test.js', './floor.test.js', './combat.test.js',
-    './sprite.test.js', './items.test.js',
+    './sprite.test.js', './items.test.js', './obstacles.test.js',
   ];
   for (const s of suites) {
     const mod = await import(s);

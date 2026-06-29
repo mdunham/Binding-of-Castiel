@@ -1,12 +1,16 @@
-// main.js — game loop + state machine. Ties content, floor, entities, items together.
+// main.js — game loop + state machine. Ties content, floor, entities, items,
+// obstacles, bombs/keys and chests together.
 
 import { loadContent } from './content.js';
 import { generateFloor, makeRng } from './floor.js';
+import { generateObstacles, clearPoint } from './obstacles.js';
 import { createInput } from './input.js';
 import { spawnEntity, stepEnemy } from './entities.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
 import { applyItem, effectiveMoveSpeed, effectiveWeapon } from './items.js';
-import { circlesOverlap, clampToRect, inDoorGap, applyDamage } from './combat.js';
+import {
+  circlesOverlap, clampToRect, inDoorGap, applyDamage, pointInRect, resolveCircleRects,
+} from './combat.js';
 import { drawSprite } from './sprite.js';
 import * as draw from './render.js';
 
@@ -20,8 +24,10 @@ const ROOM = {
   x0: 60, y0: 96, x1: W - 60, y1: H - 40,
   wall: 22, doorHalf: 34, doorDepth: 26,
 };
+const GEO = { x0: ROOM.x0, y0: ROOM.y0, x1: ROOM.x1, y1: ROOM.y1 };
 const CX = (ROOM.x0 + ROOM.x1) / 2;
 const CY = (ROOM.y0 + ROOM.y1) / 2;
+const BOMB_RADIUS = 84;
 
 const input = createInput(window);
 let content = null;
@@ -53,7 +59,8 @@ window.addEventListener('keydown', (e) => {
       startNewRun(content.players[n - 1]);
     }
   } else if (G.state === 'play') {
-    if (k === ' ' && G.bossCleared) nextFloor();
+    if (k === 'e' || k === 'b') placeBomb();
+    else if (k === ' ' && G.bossCleared) nextFloor();
     else if (k === 'r') startNewRun(G.playerDef);
   } else if (G.state === 'dead') {
     if (k === 'r') startNewRun(G.playerDef);
@@ -66,7 +73,7 @@ function startNewRun(playerDef) {
   buildFloor(playerDef, 1, player);
 }
 
-// Descend: keep the same player (items/stats/health persist), new harder floor.
+// Descend: keep the same player (items/stats/bombs/keys persist), new floor.
 function nextFloor() {
   buildFloor(G.playerDef, G.floorNum + 1, G.player);
 }
@@ -78,7 +85,10 @@ function buildFloor(playerDef, floorNum, player) {
 
   const roomState = new Map();
   for (const key of floor.rooms.keys()) {
-    roomState.set(key, { visited: false, cleared: false, spawned: false, enemies: [], pickups: [] });
+    roomState.set(key, {
+      visited: false, cleared: false, spawned: false,
+      enemies: [], pickups: [], obstacles: [], chests: [], bombs: [], explosions: [],
+    });
   }
 
   G = {
@@ -89,7 +99,7 @@ function buildFloor(playerDef, floorNum, player) {
     projectiles: [],
     rng,
     bossCleared: false,
-    banner: null,       // { text, until }
+    banner: null,
   };
   enterRoom(floor.start, null);
 }
@@ -103,12 +113,14 @@ function enterRoom(key, fromDir) {
 
   if (!rs.spawned) {
     rs.spawned = true;
+    rs.obstacles = generateObstacles(G.rng, room.type, GEO);
+
     if (room.type === 'start') {
       rs.cleared = true;
     } else if (room.type === 'treasure') {
       rs.cleared = true;
       const item = pick(content.items, G.rng);
-      if (item) rs.pickups.push(makeItemPickup(item, CX, CY));
+      rs.chests.push({ x: CX, y: CY, locked: true, opened: false, reward: item ? { kind: 'item', def: item } : null });
     } else if (room.type === 'boss') {
       const boss = pick(content.bosses, G.rng) || pick(content.enemies, G.rng);
       if (boss) {
@@ -121,12 +133,16 @@ function enterRoom(key, fromDir) {
       for (let i = 0; i < count; i++) {
         const def = pick(content.enemies, G.rng);
         if (!def) break;
-        const pos = randomRoomPoint(G.rng, def.size);
+        const pos = clearPoint(G.rng, GEO, rs.obstacles, def.size);
         const e = spawnEntity(def, pos.x, pos.y, content.weapons);
         scaleForFloor(e, G.floorNum);
         rs.enemies.push(e);
       }
       if (rs.enemies.length === 0) rs.cleared = true;
+      if (G.rng() < 0.3) {
+        const pos = clearPoint(G.rng, GEO, rs.obstacles, 18);
+        rs.chests.push({ x: pos.x, y: pos.y, locked: G.rng() < 0.4, opened: false, reward: randomChestReward(G.rng) });
+      }
     }
   }
 
@@ -145,11 +161,72 @@ function scaleForFloor(e, floorNum) {
   e.health = e.maxHealth;
 }
 
+// ---- pickups & rewards ---------------------------------------------------
 function makeItemPickup(item, x, y) {
   return { kind: 'item', item, sprite: item.sprite || null, color: item.color, x, y, radius: 13 };
 }
-function makeHeartPickup(x, y) {
-  return { kind: 'heart', x, y, radius: 11 };
+function makeConsumable(kind, x, y) { return { kind, x, y, radius: 11 }; }
+
+// Weighted consumable: hearts a bit more common than bombs/keys.
+function rollConsumable(rng) {
+  const r = rng();
+  if (r < 0.4) return 'heart';
+  if (r < 0.7) return 'bomb';
+  return 'key';
+}
+function dropFromEnemy(rng, x, y) {
+  return rng() < 0.28 ? makeConsumable(rollConsumable(rng), x, y) : null;
+}
+function randomChestReward(rng) {
+  if (rng() < 0.45 && content.items.length) return { kind: 'item', def: pick(content.items, rng) };
+  return { kind: rollConsumable(rng) };
+}
+function openChest(chest, rs) {
+  chest.opened = true;
+  const rw = chest.reward;
+  if (!rw) { banner('Empty…'); return; }
+  if (rw.kind === 'item' && rw.def) rs.pickups.push(makeItemPickup(rw.def, chest.x, chest.y - 6));
+  else rs.pickups.push(makeConsumable(rw.kind, chest.x, chest.y - 6));
+  banner('Chest opened!');
+}
+
+// ---- bombs ---------------------------------------------------------------
+function placeBomb() {
+  if (!G || G.state !== 'play') return;
+  const p = G.player;
+  if (p.bombs <= 0) { banner('No bombs'); return; }
+  p.bombs--;
+  G.roomState.get(G.currentKey).bombs.push({ x: p.x, y: p.y, fuse: 90 });
+}
+
+function explode(b, rs) {
+  const p = G.player;
+  rs.explosions.push({ x: b.x, y: b.y, radius: BOMB_RADIUS, life: 18, maxLife: 18 });
+  // rocks within blast are destroyed (chance to drop)
+  rs.obstacles = rs.obstacles.filter((rk) => {
+    const rcx = rk.x + rk.w / 2, rcy = rk.y + rk.h / 2;
+    if (Math.hypot(rcx - b.x, rcy - b.y) <= BOMB_RADIUS) {
+      if (G.rng() < 0.2) rs.pickups.push(makeConsumable(rollConsumable(G.rng), rcx, rcy));
+      return false;
+    }
+    return true;
+  });
+  // enemies
+  for (const e of rs.enemies) {
+    if (Math.hypot(e.x - b.x, e.y - b.y) <= BOMB_RADIUS + e.radius) {
+      if (applyDamage(e, 40)) {
+        e.dead = true;
+        const d = dropFromEnemy(G.rng, e.x, e.y);
+        if (d) rs.pickups.push(d);
+      }
+    }
+  }
+  // chests (bombs blast locked chests open)
+  for (const ch of rs.chests) {
+    if (!ch.opened && Math.hypot(ch.x - b.x, ch.y - b.y) <= BOMB_RADIUS) openChest(ch, rs);
+  }
+  // the player
+  if (p.iframes === 0 && Math.hypot(p.x - b.x, p.y - b.y) <= BOMB_RADIUS + p.radius) damagePlayer(2);
 }
 
 // ---- update --------------------------------------------------------------
@@ -159,12 +236,14 @@ function update() {
   const rs = G.roomState.get(G.currentKey);
   const room = G.floor.rooms.get(G.currentKey);
 
-  // Movement (item-modified speed).
+  // Movement: apply input, resolve against rocks, then clamp to the room.
   const speed = effectiveMoveSpeed(p);
   const mv = input.moveVector();
   const mlen = Math.hypot(mv.x, mv.y) || 1;
   p.x += (mv.x / mlen) * speed;
   p.y += (mv.y / mlen) * speed;
+  const r1 = resolveCircleRects(p.x, p.y, p.radius, rs.obstacles);
+  p.x = r1.x; p.y = r1.y;
   const c = clampToRect(p.x, p.y, p.radius, ROOM.x0, ROOM.y0, ROOM.x1, ROOM.y1);
   p.x = c.x; p.y = c.y;
   if (p.iframes > 0) p.iframes--;
@@ -195,13 +274,14 @@ function update() {
     if (pr.life <= 0 || pr.x < ROOM.x0 || pr.x > ROOM.x1 || pr.y < ROOM.y0 || pr.y > ROOM.y1) {
       pr.dead = true; continue;
     }
+    if (rs.obstacles.some((rk) => pointInRect(pr.x, pr.y, rk))) { pr.dead = true; continue; }
     if (pr.team === 'player') {
       for (const e of rs.enemies) {
         if (e.dead) continue;
         if (circlesOverlap(pr.x, pr.y, pr.radius, e.x, e.y, e.radius)) {
           if (applyDamage(e, pr.damage)) {
             e.dead = true;
-            if (e.role !== 'boss' && G.rng() < 0.22) rs.pickups.push(makeHeartPickup(e.x, e.y));
+            if (e.role !== 'boss') { const d = dropFromEnemy(G.rng, e.x, e.y); if (d) rs.pickups.push(d); }
           }
           if (!pr.piercing) { pr.dead = true; break; }
         }
@@ -213,19 +293,41 @@ function update() {
       }
     }
   }
+
+  // Bombs (fuse + explosion)
+  for (const b of rs.bombs) {
+    b.fuse--;
+    if (b.fuse <= 0) { explode(b, rs); b.done = true; }
+  }
+  rs.bombs = rs.bombs.filter((b) => !b.done);
+  for (const ex of rs.explosions) ex.life--;
+  rs.explosions = rs.explosions.filter((ex) => ex.life > 0);
+
   rs.enemies = rs.enemies.filter((e) => !e.dead);
   G.projectiles = G.projectiles.filter((pr) => !pr.dead);
 
+  // Chests (walk into to open; locked needs a key)
+  for (const ch of rs.chests) {
+    if (ch.opened) continue;
+    if (circlesOverlap(p.x, p.y, p.radius, ch.x, ch.y, 18)) {
+      if (ch.locked) {
+        if (p.keys > 0) { p.keys--; openChest(ch, rs); }
+        else banner('Locked — need a key (or bomb it)');
+      } else openChest(ch, rs);
+    }
+  }
+
   // Pickups
   for (const pk of rs.pickups) {
-    if (circlesOverlap(p.x, p.y, p.radius, pk.x, pk.y, pk.radius)) {
-      if (pk.kind === 'heart') {
-        if (p.health < p.maxHealth) { p.health = Math.min(p.maxHealth, p.health + 2); pk.taken = true; banner('+ Heart'); }
-      } else {
-        applyItem(p, pk.item);
-        pk.taken = true;
-        banner(`Picked up: ${pk.item.name}`);
-      }
+    if (!circlesOverlap(p.x, p.y, p.radius, pk.x, pk.y, pk.radius)) continue;
+    if (pk.kind === 'heart') {
+      if (p.health < p.maxHealth) { p.health = Math.min(p.maxHealth, p.health + 2); pk.taken = true; banner('+ Heart'); }
+    } else if (pk.kind === 'bomb') {
+      p.bombs++; pk.taken = true; banner('+ Bomb');
+    } else if (pk.kind === 'key') {
+      p.keys++; pk.taken = true; banner('+ Key');
+    } else {
+      applyItem(p, pk.item); pk.taken = true; banner(`Picked up: ${pk.item.name}`);
     }
   }
   rs.pickups = rs.pickups.filter((pk) => !pk.taken);
@@ -296,13 +398,18 @@ function drawPlay() {
   const room = G.floor.rooms.get(G.currentKey);
   const rs = G.roomState.get(G.currentKey);
   draw.drawRoom(ctx, ROOM, room.neighbors, rs.cleared);
+  for (const rk of rs.obstacles) draw.drawRock(ctx, rk);
+  for (const ch of rs.chests) draw.drawChest(ctx, ch, tick);
   for (const pk of rs.pickups) draw.drawPickup(ctx, pk, tick);
   for (const pr of G.projectiles) draw.drawProjectile(ctx, pr);
+  for (const b of rs.bombs) draw.drawBomb(ctx, b);
   for (const e of rs.enemies) draw.drawEntity(ctx, e, false);
   draw.drawEntity(ctx, G.player, true);
+  for (const ex of rs.explosions) draw.drawExplosion(ctx, ex);
 
   // HUD
   draw.drawHearts(ctx, G.player, 24, 28);
+  draw.drawResources(ctx, G.player, 24, 80);
   const eff = effectiveWeapon(G.player) || { damage: 0, fireRate: 0 };
   ctx.fillStyle = '#c9bcd8';
   ctx.font = '13px monospace';
@@ -322,7 +429,6 @@ function drawPlay() {
     ctx.fillText('✦ TREASURE ✦', W / 2, 84); ctx.textAlign = 'left';
   }
 
-  // Banner (pickups / boss / descend prompt)
   ctx.textAlign = 'center';
   if (G.bossCleared) {
     ctx.fillStyle = '#7ed957'; ctx.font = '15px monospace';
@@ -355,13 +461,12 @@ function drawSelect() {
   ctx.fillText('CHOOSE YOUR CHARACTER', W / 2, 90);
   ctx.font = '13px monospace';
   ctx.fillStyle = '#a99cb8';
-  ctx.fillText('Click a character or press its number. WASD move • Arrows shoot • items & treasure await', W / 2, 118);
+  ctx.fillText('Click a character or press its number. WASD move • Arrows shoot • E bomb • items, keys & chests await', W / 2, 118);
 
   content.players.forEach((pd, i) => {
     const y = CARD.top + i * (CARD.height + CARD.gap);
     ctx.fillStyle = '#2b2330';
     ctx.fillRect(CARD.left, y, CARD.width, CARD.height);
-    // avatar: sprite if present, else blob
     const ax = CARD.left + 45, ay = y + CARD.height / 2;
     if (!drawSprite(ctx, pd.sprite, ax, ay, (pd.size + 6) * 2)) {
       ctx.beginPath(); ctx.arc(ax, ay, pd.size + 6, 0, Math.PI * 2);
@@ -386,17 +491,6 @@ function drawSelect() {
 function pick(arr, rng) {
   if (!arr || arr.length === 0) return null;
   return arr[Math.floor(rng() * arr.length)];
-}
-
-function randomRoomPoint(rng, radius) {
-  const pad = radius + 20;
-  let x, y, tries = 0;
-  do {
-    x = ROOM.x0 + pad + rng() * (ROOM.x1 - ROOM.x0 - 2 * pad);
-    y = ROOM.y0 + pad + rng() * (ROOM.y1 - ROOM.y0 - 2 * pad);
-    tries++;
-  } while (tries < 8 && Math.hypot(x - CX, y - CY) < 90);
-  return { x, y };
 }
 
 // Dev hook: lets tooling/console inspect live state. Harmless in normal play.
