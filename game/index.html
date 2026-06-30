@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>IsaacLike</title>
   <style>
     html, body {
@@ -12,6 +12,9 @@
       font-family: monospace;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
+      overscroll-behavior: none;
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none;
     }
     h1 { margin: 12px 0 6px; font-size: 18px; letter-spacing: 2px; color: #b9a9cc; }
     #game {
@@ -20,6 +23,12 @@
       border-radius: 6px;
       image-rendering: pixelated;
       max-width: 96vw; max-height: 82vh;
+      touch-action: none;           /* let the game handle touch, no scroll/zoom */
+    }
+    /* On phones, hide the title and let the canvas use the full viewport. */
+    @media (pointer: coarse), (max-width: 700px) {
+      h1 { display: none; }
+      #game { max-width: 100vw; max-height: 100vh; }
     }
     /* Fullscreen: scale the canvas to fill the screen, preserving aspect. */
     #game:fullscreen {
@@ -30,8 +39,14 @@
       background: #0d0a12;
     }
     .bar { margin-top: 8px; display: flex; gap: 12px; align-items: center; }
-    .hint { font-size: 12px; color: #6f6480; }
+    .hint { font-size: 12px; color: #6f6480; max-width: 92vw; text-align: center; line-height: 1.5; }
     .hint a { color: #9a86b8; }
+    .ctrl {
+      font-size: 12px; color: #c9bcd8; display: flex; align-items: center; gap: 6px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .ctrl input { accent-color: #9a86b8; cursor: pointer; }
+    #gpStatus { font-size: 11px; color: #7ed957; min-width: 4em; }
     #fsBtn, #cheatBtn {
       background: #2b2330; color: #e0d6ea; border: 1px solid #3a3145;
       padding: 6px 12px; border-radius: 5px; cursor: pointer; font-family: monospace; font-size: 12px;
@@ -62,7 +77,13 @@
   <div class="bar">
     <button id="fsBtn">⛶ Fullscreen</button>
     <button id="cheatBtn">🐞 Cheats</button>
-    <p class="hint">WASD move • Arrows shoot • E bomb • M mute • R new run • SPACE descend &nbsp;|&nbsp;
+    <label class="ctrl" title="Enable Xbox / standard USB gamepad (left stick move, right stick shoot, X bomb, A descend)">
+      <input type="checkbox" id="gpToggle" /> Gamepad
+    </label>
+    <span id="gpStatus"></span>
+    <p class="hint">Keyboard: WASD move · Arrows shoot · E bomb · M mute · R restart · SPACE descend<br>
+      Touch: twin virtual sticks · bomb button · tap character to start<br>
+      Gamepad: left stick move · right stick shoot · X bomb · A descend · B restart<br>
       <a href="../designer/index.html">designer</a></p>
   </div>
   <div id="cheatPanel"></div>

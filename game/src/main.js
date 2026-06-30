@@ -4,7 +4,7 @@
 import { loadContent } from './content.js';
 import { generateFloor, makeRng } from './floor.js';
 import { generateObstacles, clearPoint } from './obstacles.js';
-import { createInput } from './input.js';
+import { createInput, GP } from './input.js';
 import { spawnEntity, stepEnemy } from './entities.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
 import { applyItem, effectiveMoveSpeed, effectiveWeapon, luckBonus } from './items.js';
@@ -36,6 +36,36 @@ let content = null;
 let G = null;            // active game state
 let seedCounter = 1234;  // bumped each new floor for variety
 let tick = 0;            // global frame counter (for bobbing/animation)
+
+// ---- touch / mobile controls --------------------------------------------
+const isTouchDevice = (typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches)
+  || (typeof window !== 'undefined' && 'ontouchstart' in window);
+let touchMove = { x: 0, y: 0 };
+let touchAim = { x: 0, y: 0 };
+const moveStick = { id: null, bx: 0, by: 0, cx: 0, cy: 0 };
+const aimStick = { id: null, bx: 0, by: 0, cx: 0, cy: 0 };
+const BOMB_BTN = () => ({ x: W - 96, y: H - 104, r: 50 });
+const MUTE_BTN = () => ({ x: 52, y: H - 56, r: 24 });
+const MOVE_GUIDE = () => ({ x: 120, y: H - 130 });
+const AIM_GUIDE = () => ({ x: W - 120, y: H - 130 });
+const DESCEND_BTN = () => ({ x: W / 2, y: H - 70, w: 260, h: 52 });
+
+// Gamepad UI toggle (persisted in localStorage via input.js).
+const gpToggle = document.getElementById('gpToggle');
+const gpStatus = document.getElementById('gpStatus');
+if (gpToggle) {
+  gpToggle.checked = input.isGamepadEnabled();
+  gpToggle.addEventListener('change', () => {
+    input.setGamepadEnabled(gpToggle.checked);
+    updateGpStatus();
+    if (gpToggle.checked) audio.resume();
+  });
+}
+function updateGpStatus() {
+  if (!gpStatus) return;
+  if (!input.isGamepadEnabled()) { gpStatus.textContent = ''; return; }
+  gpStatus.textContent = input.gamepadConnected() ? '● linked' : '○ press a button';
+}
 
 const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
 
@@ -279,6 +309,28 @@ function explode(b, rs) {
   if (p.iframes === 0 && Math.hypot(p.x - b.x, p.y - b.y) <= BOMB_RADIUS + p.radius) damagePlayer(2);
 }
 
+// ---- gamepad actions (polled each frame in frame()) ----------------------
+function handleGamepad() {
+  if (!input.isGamepadEnabled() || !G) return;
+  audio.resume();
+  if (G.state === 'play') {
+    if (input.buttonJustPressed(GP.X) || input.buttonJustPressed(GP.RB)) placeBomb();
+    if (G.bossCleared && (input.buttonJustPressed(GP.A) || input.buttonJustPressed(GP.START))) nextFloor();
+    if (input.buttonJustPressed(GP.B)) startNewRun(G.playerDef);
+  } else if (G.state === 'dead') {
+    if (input.buttonJustPressed(GP.B) || input.buttonJustPressed(GP.A) || input.buttonJustPressed(GP.START)) {
+      startNewRun(G.playerDef);
+    }
+  } else if (G.state === 'select' && content) {
+    const idx = G.selectedIndex ?? 0;
+    if (input.buttonJustPressed(GP.DPAD_UP)) G.selectedIndex = Math.max(0, idx - 1);
+    if (input.buttonJustPressed(GP.DPAD_DOWN)) G.selectedIndex = Math.min(content.players.length - 1, idx + 1);
+    if (input.buttonJustPressed(GP.A) || input.buttonJustPressed(GP.START)) {
+      startNewRun(content.players[G.selectedIndex ?? 0]);
+    }
+  }
+}
+
 // ---- update --------------------------------------------------------------
 function update() {
   if (!G || G.state !== 'play') return;
@@ -286,9 +338,10 @@ function update() {
   const rs = G.roomState.get(G.currentKey);
   const room = G.floor.rooms.get(G.currentKey);
 
-  // Movement: apply input, resolve against rocks, then clamp to the room.
+  // Movement: keyboard / gamepad / touch — resolve rocks, clamp to room.
   const speed = effectiveMoveSpeed(p);
-  const mv = input.moveVector();
+  const mvk = input.moveVector();
+  const mv = (mvk.x || mvk.y) ? mvk : touchMove;
   const mlen = Math.hypot(mv.x, mv.y) || 1;
   p.x += (mv.x / mlen) * speed;
   p.y += (mv.y / mlen) * speed;
@@ -299,8 +352,9 @@ function update() {
   if (p.iframes > 0) p.iframes--;
   if (p.cooldown > 0) p.cooldown--;
 
-  // Shooting (item-modified weapon).
-  const aim = input.aimVector();
+  // Shooting; aim from arrows, right stick, or touch aim stick.
+  const aimk = input.aimVector();
+  const aim = (aimk.x || aimk.y) ? aimk : touchAim;
   const eff = effectiveWeapon(p);
   if ((aim.x || aim.y) && eff && p.cooldown === 0) {
     const len = Math.hypot(aim.x, aim.y);
@@ -489,6 +543,10 @@ function hudText(text, x, y, color, font) {
 // ---- render --------------------------------------------------------------
 function frame() {
   tick++;
+  input.poll();
+  handleGamepad();
+  input.endPoll();
+  updateGpStatus();
   update();
   draw.clear(ctx, W, H);
   if (!G) { requestAnimationFrame(frame); return; }
@@ -563,7 +621,10 @@ function drawPlay() {
   ctx.textAlign = 'center';
   if (G.bossCleared) {
     ctx.fillStyle = '#7ed957'; ctx.font = '15px monospace';
-    ctx.fillText('Boss defeated — grab your reward, then press SPACE to descend', W / 2, H - 16);
+    const msg = isTouchDevice
+      ? 'Boss defeated — grab your reward, then tap DESCEND or press SPACE / A'
+      : 'Boss defeated — grab your reward, then press SPACE or A to descend';
+    ctx.fillText(msg, W / 2, H - 16);
   }
   if (G.banner && tick < G.banner.until) {
     ctx.fillStyle = '#ffe08a'; ctx.font = 'bold 16px monospace';
@@ -572,6 +633,7 @@ function drawPlay() {
   ctx.textAlign = 'left';
 
   draw.drawMinimap(ctx, G.floor, G.roomState, G.currentKey, W - 150, 18);
+  drawTouchControls();
 }
 
 // ---- character select ----------------------------------------------------
@@ -592,11 +654,16 @@ function drawSelect() {
   ctx.fillText('CHOOSE YOUR CHARACTER', W / 2, 90);
   ctx.font = '13px monospace';
   ctx.fillStyle = '#a99cb8';
-  ctx.fillText('Click a character or press its number. WASD move • Arrows shoot • E bomb • items, keys & chests await', W / 2, 118);
+  ctx.fillText('Click / tap a character or press its number. WASD or left stick move · Arrows or right stick shoot', W / 2, 118);
+  if (isTouchDevice) {
+    ctx.fillStyle = '#7a9cb8';
+    ctx.fillText('Touch: tap a character card to begin', W / 2, 136);
+  }
 
   content.players.forEach((pd, i) => {
     const y = CARD.top + i * (CARD.height + CARD.gap);
-    ctx.fillStyle = '#2b2330';
+    const selected = i === (G.selectedIndex ?? 0);
+    ctx.fillStyle = selected ? '#3a3148' : '#2b2330';
     ctx.fillRect(CARD.left, y, CARD.width, CARD.height);
     const ax = CARD.left + 45, ay = y + CARD.height / 2;
     if (!drawSprite(ctx, pd.sprite, ax, ay, (pd.size + 6) * 2)) {
@@ -686,6 +753,135 @@ function buildCheatPanel() {
   }
   section('Spawn item', content.items.map((it) => mk(it.name, () => Cheat.item(it.id))));
   section('Spawn enemy', [...content.enemies, ...content.bosses].map((c) => mk(c.name, () => Cheat.enemy(c.id))));
+}
+
+// ---- touch input ---------------------------------------------------------
+function canvasPoint(t) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (t.clientX - r.left) * (W / r.width), y: (t.clientY - r.top) * (H / r.height) };
+}
+const inCircle = (p, b) => Math.hypot(p.x - b.x, p.y - b.y) <= b.r;
+const inRect = (p, r) => Math.abs(p.x - r.x) <= r.w / 2 && Math.abs(p.y - r.y) <= r.h / 2;
+
+function stickVec(p, s) {
+  s.cx = p.x; s.cy = p.y;
+  const dx = p.x - s.bx, dy = p.y - s.by;
+  const len = Math.hypot(dx, dy);
+  if (len < 12) return { x: 0, y: 0 };
+  const m = Math.min(1, len / 60);
+  return { x: (dx / len) * m, y: (dy / len) * m };
+}
+
+function onTouchStart(e) {
+  e.preventDefault();
+  audio.resume();
+  for (const t of e.changedTouches) {
+    const p = canvasPoint(t);
+    if (inCircle(p, MUTE_BTN())) { audio.toggleMute(); continue; }
+    if (!G) continue;
+    if (G.state === 'select') {
+      const i = playerCardIndexAt(p.y);
+      if (i != null && i < content.players.length) startNewRun(content.players[i]);
+      continue;
+    }
+    if (G.state === 'dead') { startNewRun(G.playerDef); continue; }
+    if (G.state === 'play') {
+      if (G.bossCleared && inRect(p, DESCEND_BTN())) { nextFloor(); continue; }
+      if (inCircle(p, BOMB_BTN())) { placeBomb(); continue; }
+      const mg = MOVE_GUIDE(), ag = AIM_GUIDE();
+      const nearMove = Math.hypot(p.x - mg.x, p.y - mg.y) < 80;
+      const nearAim = Math.hypot(p.x - ag.x, p.y - ag.y) < 80;
+      if ((p.x < W / 2 || nearMove) && moveStick.id === null) {
+        const g = nearMove ? mg : p;
+        moveStick.id = t.identifier; moveStick.bx = moveStick.cx = g.x; moveStick.by = moveStick.cy = g.y;
+        touchMove = { x: 0, y: 0 };
+      } else if ((p.x >= W / 2 || nearAim) && aimStick.id === null) {
+        const g = nearAim ? ag : p;
+        aimStick.id = t.identifier; aimStick.bx = aimStick.cx = g.x; aimStick.by = aimStick.cy = g.y;
+        touchAim = { x: 0, y: 0 };
+      }
+    }
+  }
+}
+function onTouchMove(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const p = canvasPoint(t);
+    if (moveStick.id === t.identifier) touchMove = stickVec(p, moveStick);
+    else if (aimStick.id === t.identifier) touchAim = stickVec(p, aimStick);
+  }
+}
+function onTouchEnd(e) {
+  for (const t of e.changedTouches) {
+    if (moveStick.id === t.identifier) { moveStick.id = null; touchMove = { x: 0, y: 0 }; }
+    else if (aimStick.id === t.identifier) { aimStick.id = null; touchAim = { x: 0, y: 0 }; }
+  }
+}
+canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+canvas.addEventListener('touchend', onTouchEnd);
+canvas.addEventListener('touchcancel', onTouchEnd);
+
+// Drawn on-canvas controls (only on touch devices).
+function drawTouchControls() {
+  if (!isTouchDevice || !G || G.state !== 'play') return;
+
+  // faint joystick guides (always visible so players know where to touch)
+  for (const [g, col, label] of [
+    [MOVE_GUIDE(), '#9cd2ff', 'MOVE'],
+    [AIM_GUIDE(), '#ff9c6a', 'AIM'],
+  ]) {
+    if ((label === 'MOVE' && moveStick.id !== null) || (label === 'AIM' && aimStick.id !== null)) continue;
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(g.x, g.y, 56, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = col; ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.arc(g.x, g.y, 22, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.45; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(label, g.x, g.y + 78);
+    ctx.globalAlpha = 1;
+  }
+
+  // active sticks
+  for (const [s, col] of [[moveStick, '#9cd2ff'], [aimStick, '#ff9c6a']]) {
+    if (s.id === null) continue;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(s.bx, s.by, 56, 0, Math.PI * 2); ctx.stroke();
+    const dx = s.cx - s.bx, dy = s.cy - s.by; const len = Math.hypot(dx, dy) || 1;
+    const k = Math.min(56, len) / len;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(s.bx + dx * k, s.by + dy * k, 26, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  // bomb button
+  const bb = BOMB_BTN();
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = 'rgba(40,32,52,0.8)';
+  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#6a5a7a'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#23202a';
+  ctx.beginPath(); ctx.arc(bb.x, bb.y + 3, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#8a6a3a'; ctx.beginPath(); ctx.moveTo(bb.x, bb.y - 13); ctx.lineTo(bb.x + 5, bb.y - 22); ctx.stroke();
+  ctx.fillStyle = '#e8def2'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`×${G.player.bombs}`, bb.x, bb.y + 40);
+  // mute button
+  const mb = MUTE_BTN();
+  ctx.fillStyle = 'rgba(40,32,52,0.8)';
+  ctx.beginPath(); ctx.arc(mb.x, mb.y, mb.r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#6a5a7a'; ctx.stroke();
+  ctx.fillStyle = '#e0d6ea'; ctx.font = '18px monospace';
+  ctx.fillText(audio.isMuted() ? '🔇' : '🔊', mb.x, mb.y + 6);
+  ctx.globalAlpha = 1;
+  // descend button after boss
+  if (G.bossCleared) {
+    const d = DESCEND_BTN();
+    ctx.fillStyle = '#2e6b3a';
+    ctx.fillRect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h);
+    ctx.fillStyle = '#dfffe4'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('⏬ TAP TO DESCEND', d.x, d.y + 6);
+  }
+  ctx.textAlign = 'left';
 }
 
 // Dev hook: lets tooling/console inspect live state. Harmless in normal play.
