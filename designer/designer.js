@@ -23,9 +23,12 @@ const charFields = (role) => ({
   color: { type: 'color', label: 'Color (fallback if no sprite)' },
   weaponId: { type: 'weaponRef', label: 'Weapon' },
   ...(role === 'enemy' || role === 'boss'
-    ? { ai: { type: 'select', label: 'AI', options: ['chase', 'wander', 'shooter'] },
+    ? { ai: { type: 'select', label: 'AI', options: ['chase', 'wander', 'shooter', 'spawner'] },
         contactDamage: NUM('Contact Damage (half-hearts)', 0, 20),
-        flying: { type: 'bool', label: 'Flying (ignores rocks)' } }
+        flying: { type: 'bool', label: 'Flying (ignores rocks)' },
+        spawnId: { type: 'charRef', label: 'Spawns (spawner AI)' },
+        spawnInterval: NUM('Spawn interval (sec)', 0.3, 20),
+        spawnCount: NUM('Spawn count', 1, 8, 1) }
     : {}),
 });
 const weaponFields = {
@@ -324,6 +327,19 @@ function buildField(item, name, spec) {
       const o = document.createElement('option');
       o.value = w.id; o.textContent = w.name || w.id;
       if (item[name] === w.id) o.selected = true;
+      el.appendChild(o);
+    }
+    el.onchange = () => { item[name] = el.value || undefined; liveValidate(); };
+  } else if (spec.type === 'charRef') {
+    el = document.createElement('select');
+    const none = document.createElement('option');
+    none.value = ''; none.textContent = '(none)';
+    el.appendChild(none);
+    for (const ch of state.data.characters.filter((c) => c.role === 'enemy' || c.role === 'boss')) {
+      if (ch.id === item.id) continue; // don't spawn yourself
+      const o = document.createElement('option');
+      o.value = ch.id; o.textContent = ch.name || ch.id;
+      if (item[name] === ch.id) o.selected = true;
       el.appendChild(o);
     }
     el.onchange = () => { item[name] = el.value || undefined; liveValidate(); };

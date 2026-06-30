@@ -8,6 +8,7 @@ import { createInput } from './input.js';
 import { spawnEntity, stepEnemy } from './entities.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
 import { applyItem, effectiveMoveSpeed, effectiveWeapon, luckBonus } from './items.js';
+import { TUNING } from './config.js';
 import {
   circlesOverlap, clampToRect, inDoorGap, applyDamage, pointInRect, resolveCircleRects,
 } from './combat.js';
@@ -166,11 +167,50 @@ function scaleForFloor(e, floorNum) {
   e.health = e.maxHealth;
 }
 
+const ENEMY_CAP = 26; // keep a spawner from flooding the room
+
+// A spawner enemy births smaller, faster minis on a timer. Minis chase and
+// never spawn themselves (no runaway recursion).
+function handleSpawner(e, rs, out) {
+  e.spawnTimer--;
+  if (e.spawnTimer > 0) return;
+  e.spawnTimer = Math.round((e.def.spawnInterval || 2.4) * 60);
+  if (rs.enemies.length + out.length >= ENEMY_CAP) return;
+  const baseDef = e.spawnId ? content.characters.get(e.spawnId) : e.def;
+  if (!baseDef) return;
+  const count = e.def.spawnCount || 2;
+  for (let i = 0; i < count; i++) {
+    const ang = G.rng() * Math.PI * 2;
+    const mini = spawnEntity(
+      miniDef(baseDef),
+      e.x + Math.cos(ang) * (e.radius + 8),
+      e.y + Math.sin(ang) * (e.radius + 8),
+      content.weapons,
+    );
+    out.push(mini);
+  }
+  audio.play('spawn');
+}
+
+function miniDef(def) {
+  return {
+    ...def,
+    role: 'enemy',
+    ai: 'chase',                                   // minis hunt the player
+    size: Math.max(6, def.size * 0.5),             // smaller
+    moveSpeed: def.moveSpeed * 1.6,                // faster
+    maxHealth: Math.max(2, Math.round(def.maxHealth * 0.4)),
+    spawnId: undefined,                            // minis don't spawn
+    sprite: def.sprite,
+    contactDamage: def.contactDamage || 1,
+  };
+}
+
 // ---- pickups & rewards ---------------------------------------------------
 function makeItemPickup(item, x, y) {
-  return { kind: 'item', item, sprite: item.sprite || null, color: item.color, x, y, radius: 13 };
+  return { kind: 'item', item, sprite: item.sprite || null, color: item.color, x, y, radius: 13 * TUNING.pickupSizeMult };
 }
-function makeConsumable(kind, x, y) { return { kind, x, y, radius: 11 }; }
+function makeConsumable(kind, x, y) { return { kind, x, y, radius: 11 * TUNING.pickupSizeMult }; }
 
 // Weighted consumable: hearts a bit more common than bombs/keys.
 function rollConsumable(rng) {
@@ -269,8 +309,10 @@ function update() {
   }
 
   // Enemies — move by AI, collide with rocks (unless flying), stay in the room.
+  const spawned = [];
   for (const e of rs.enemies) {
     stepEnemy(e, p, G.projectiles);
+    if (e.ai === 'spawner') handleSpawner(e, rs, spawned);
     if (!e.flying) {
       const er = resolveCircleRects(e.x, e.y, e.radius, rs.obstacles);
       e.x = er.x; e.y = er.y;
@@ -281,6 +323,7 @@ function update() {
       damagePlayer(e.contactDamage || 1);
     }
   }
+  if (spawned.length) rs.enemies.push(...spawned);
 
   // Projectiles
   for (const pr of G.projectiles) {
@@ -403,6 +446,16 @@ function steerHoming(pr, enemies) {
 
 function banner(text) { G.banner = { text, until: tick + 120 }; }
 
+// HUD text with a 1px dark shadow so it stays readable over any background.
+function hudText(text, x, y, color, font) {
+  ctx.font = font;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillText(text, x + 1, y + 1);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
 // ---- render --------------------------------------------------------------
 function frame() {
   tick++;
@@ -434,7 +487,7 @@ function frame() {
 function drawPlay() {
   const room = G.floor.rooms.get(G.currentKey);
   const rs = G.roomState.get(G.currentKey);
-  draw.drawRoom(ctx, ROOM, room.neighbors, rs.cleared);
+  draw.drawRoom(ctx, ROOM, room.neighbors, rs.cleared, tick);
   for (const rk of rs.obstacles) draw.drawRock(ctx, rk);
   for (const ch of rs.chests) draw.drawChest(ctx, ch, tick);
   for (const pk of rs.pickups) draw.drawPickup(ctx, pk, tick);
@@ -444,29 +497,36 @@ function drawPlay() {
   draw.drawEntity(ctx, G.player, true);
   for (const ex of rs.explosions) draw.drawExplosion(ctx, ex);
 
-  // HUD
-  draw.drawHearts(ctx, G.player, 24, 28);
-  draw.drawResources(ctx, G.player, 24, 80);
-  ctx.fillStyle = '#6f6480'; ctx.font = '11px monospace'; ctx.textAlign = 'right';
-  ctx.fillText(audio.isMuted() ? '🔇 muted (M)' : '🔊 sound (M)', W - 24, H - 14);
+  // ---- HUD (drawn on a dark strip so bigger text stays legible) ----
+  ctx.fillStyle = 'rgba(12,9,16,0.82)';
+  ctx.fillRect(0, 0, W, ROOM.y0 - ROOM.wall - 2); // strip above the walls
   ctx.textAlign = 'left';
+
+  // Row 1: hearts + name/weapon/floor
+  draw.drawHearts(ctx, G.player, 20, 24, 1.3);
+  const nameX = 20 + draw.heartsWidth(G.player, 1.3) + 18;
+  hudText(`${G.playerDef.name}  ·  ${G.player.weapon ? G.player.weapon.name : 'Unarmed'}  ·  Floor ${G.floorNum}`,
+    nameX, 30, '#c9bcd8', 'bold 16px monospace');
+
+  // Row 2: bombs/keys + combat stats
+  draw.drawResources(ctx, G.player, 20, 56);
   const eff = effectiveWeapon(G.player) || { damage: 0, fireRate: 0 };
-  ctx.fillStyle = '#c9bcd8';
-  ctx.font = '13px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(
-    `${G.playerDef.name}  •  ${G.player.weapon ? G.player.weapon.name : 'Unarmed'}  •  `
-    + `DMG ${eff.damage.toFixed(1)}  RATE ${eff.fireRate.toFixed(1)}  SPD ${effectiveMoveSpeed(G.player).toFixed(1)}`
-    + `  •  Items ${G.player.items.length}  •  Floor ${G.floorNum}`,
-    24, 60,
+  hudText(
+    `DMG ${eff.damage.toFixed(1)}   RATE ${eff.fireRate.toFixed(1)}   SPD ${effectiveMoveSpeed(G.player).toFixed(1)}   ·   Items ${G.player.items.length}`,
+    nameX, 62, '#e8def2', 'bold 17px monospace',
   );
 
+  // sound indicator (bottom-right, clear of the minimap)
+  ctx.fillStyle = '#9a86b8'; ctx.font = '13px monospace'; ctx.textAlign = 'right';
+  ctx.fillText(audio.isMuted() ? '🔇 muted (M)' : '🔊 sound (M)', W - 20, H - 14);
+  ctx.textAlign = 'left';
+
   if (room.type === 'boss' && !rs.cleared) {
-    ctx.fillStyle = '#e74c3c'; ctx.textAlign = 'center';
-    ctx.fillText('— BOSS —', W / 2, 84); ctx.textAlign = 'left';
+    ctx.fillStyle = '#ff6a5a'; ctx.textAlign = 'center'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('— BOSS —', W / 2, ROOM.y0 + 28); ctx.textAlign = 'left';
   } else if (room.type === 'treasure') {
-    ctx.fillStyle = '#d8c84a'; ctx.textAlign = 'center';
-    ctx.fillText('✦ TREASURE ✦', W / 2, 84); ctx.textAlign = 'left';
+    ctx.fillStyle = '#e0c84a'; ctx.textAlign = 'center'; ctx.font = 'bold 18px monospace';
+    ctx.fillText('✦ TREASURE ✦', W / 2, ROOM.y0 + 28); ctx.textAlign = 'left';
   }
 
   ctx.textAlign = 'center';

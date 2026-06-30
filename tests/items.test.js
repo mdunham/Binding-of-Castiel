@@ -1,5 +1,6 @@
 import { test, eq, ok, approx } from './run.js';
 import { emptyMods, applyItem, effectiveWeapon, effectiveMoveSpeed, luckBonus } from '../game/src/items.js';
+import { TUNING } from '../game/src/config.js';
 
 export const NAME = 'item effects';
 
@@ -60,10 +61,10 @@ export function run() {
     ok(w.shotCount >= 1, 'shotCount floored');
   });
 
-  test('effectiveMoveSpeed adds mods to base', () => {
+  test('effectiveMoveSpeed adds mods to tuning-scaled base', () => {
     const p = makePlayer();
     applyItem(p, { id: 'speed', effects: { moveSpeed: 0.55 } });
-    approx(effectiveMoveSpeed(p), 3.15, 1e-9);
+    approx(effectiveMoveSpeed(p), 2.6 * TUNING.speedMult + 0.55, 1e-9);
   });
 
   test('effectiveWeapon is null when unarmed', () => {

@@ -52,6 +52,17 @@ export function run() {
     ok(r.ok, r.errors.join('; '));
   });
 
+  test('spawner enemy with a valid spawnId passes; bad spawnId fails', () => {
+    const spider = { id: 'spider', name: 'Spider', role: 'enemy', maxHealth: 5, moveSpeed: 1,
+      size: 10, color: '#000', ai: 'wander', contactDamage: 1 };
+    const brood = { id: 'brood', name: 'Brood', role: 'enemy', maxHealth: 40, moveSpeed: 1,
+      size: 20, color: '#345', ai: 'spawner', spawnId: 'spider', contactDamage: 1 };
+    ok(validateContent({ characters: [goodPlayer, spider, brood], weapons: [goodWeapon] }).ok, 'valid spawner');
+    const bad = { ...brood, spawnId: 'nope' };
+    const r = validateContent({ characters: [goodPlayer, spider, bad], weapons: [goodWeapon] });
+    ok(!r.ok && r.errors.some((e) => e.includes('spawnId')), 'bad spawnId flagged');
+  });
+
   test('indexContent splits by role', () => {
     const enemy = { id: 'e', name: 'E', role: 'enemy', maxHealth: 5, moveSpeed: 1,
       size: 10, color: '#000', ai: 'chase', contactDamage: 1 };

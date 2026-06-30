@@ -3,6 +3,7 @@
 import { unitToward } from './combat.js';
 import { fireWeapon, cooldownFrames } from './weapons.js';
 import { emptyMods } from './items.js';
+import { TUNING } from './config.js';
 
 let nextId = 1;
 
@@ -13,15 +14,17 @@ export function spawnEntity(def, x, y, weapons) {
     eid: nextId++,
     def,
     x, y,
-    radius: def.size,
+    radius: def.size * TUNING.sizeMult,
     color: def.color,
     sprite: def.sprite || null,
     health: def.maxHealth,
     maxHealth: def.maxHealth,
-    moveSpeed: def.moveSpeed,
+    moveSpeed: def.moveSpeed * TUNING.speedMult,
     role: def.role,
     ai: def.ai || null,
     flying: !!def.flying,
+    spawnId: def.spawnId || null,
+    spawnTimer: def.ai === 'spawner' ? 90 : 0, // first brood after ~1.5s
     contactDamage: def.contactDamage || 0,
     weapon,
     cooldown: 0,
@@ -59,6 +62,13 @@ export function stepEnemy(e, player, out) {
       if (Math.random() < 0.02) e.wanderAngle = Math.random() * Math.PI * 2;
       e.x += Math.cos(e.wanderAngle) * e.moveSpeed;
       e.y += Math.sin(e.wanderAngle) * e.moveSpeed;
+      break;
+    }
+    case 'spawner': {
+      // Lumbers slowly toward the player; the spawning itself is handled in main.
+      const u = unitToward(e.x, e.y, player.x, player.y);
+      e.x += u.x * e.moveSpeed * 0.6;
+      e.y += u.y * e.moveSpeed * 0.6;
       break;
     }
     case 'shooter': {

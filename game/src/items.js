@@ -2,6 +2,8 @@
 // Items apply additive deltas to a player's stat modifiers ("mods"). Weapon-derived
 // values are computed from base weapon + mods at fire time so pickups stack cleanly.
 
+import { TUNING } from './config.js';
+
 export const MOD_KEYS = [
   'damage', 'fireRate', 'moveSpeed', 'shotCount', 'projectileSpeed', 'range', 'spread',
   'damageMult', 'piercing', 'homing', 'luck',
@@ -36,9 +38,9 @@ export function applyItem(player, item) {
   return item.id;
 }
 
-/** Effective move speed after item mods (never below a floor). */
+/** Effective move speed after item mods + global tuning (never below a floor). */
 export function effectiveMoveSpeed(player) {
-  return Math.max(0.4, player.def.moveSpeed + player.mods.moveSpeed);
+  return Math.max(0.4, player.def.moveSpeed * TUNING.speedMult + player.mods.moveSpeed);
 }
 
 /** Effective weapon (base weapon merged with mods) for firing. Null if unarmed. */

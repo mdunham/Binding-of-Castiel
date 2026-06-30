@@ -13,7 +13,7 @@ const CHAR_FIELDS = {
 };
 
 const ROLES = ['player', 'enemy', 'boss'];
-const AIS = ['chase', 'wander', 'shooter'];
+const AIS = ['chase', 'wander', 'shooter', 'spawner'];
 
 /**
  * Validate a parsed content object.
@@ -103,6 +103,13 @@ export function validateContent(data) {
     }
     errors.push(...spriteErrors(`character "${c.id}"`, c.sprite));
   });
+
+  // spawnId refs validated after the full id set is known (may point forward).
+  for (const c of characters) {
+    if (c && c.spawnId != null && !charIds.has(c.spawnId)) {
+      errors.push(`character "${c.id}" spawnId "${c.spawnId}" not found`);
+    }
+  }
 
   if (!hasPlayer) errors.push('content needs at least one role:"player" character');
 
