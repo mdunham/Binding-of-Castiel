@@ -32,11 +32,28 @@
     .bar { margin-top: 8px; display: flex; gap: 12px; align-items: center; }
     .hint { font-size: 12px; color: #6f6480; }
     .hint a { color: #9a86b8; }
-    #fsBtn {
+    #fsBtn, #cheatBtn {
       background: #2b2330; color: #e0d6ea; border: 1px solid #3a3145;
       padding: 6px 12px; border-radius: 5px; cursor: pointer; font-family: monospace; font-size: 12px;
     }
-    #fsBtn:hover { border-color: #9a86b8; }
+    #fsBtn:hover, #cheatBtn:hover { border-color: #9a86b8; }
+    #cheatPanel {
+      display: none; position: fixed; top: 0; right: 0; bottom: 0; width: 280px;
+      background: rgba(18,13,24,0.96); border-left: 2px solid #3a3145;
+      padding: 12px 14px; overflow-y: auto; z-index: 50;
+      font-family: monospace; font-size: 12px; color: #e0d6ea;
+    }
+    #cheatPanel.open { display: block; }
+    #cheatPanel h3 { margin: 14px 0 6px; font-size: 12px; color: #9a86b8; letter-spacing: 1px; }
+    #cheatPanel h3:first-child { margin-top: 0; }
+    #cheatPanel .grid { display: flex; flex-wrap: wrap; gap: 5px; }
+    #cheatPanel button {
+      background: #2b2330; color: #e0d6ea; border: 1px solid #3a3145;
+      padding: 5px 8px; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 11px;
+    }
+    #cheatPanel button:hover { border-color: #9a86b8; background: #352c41; }
+    #cheatPanel .close { float: right; }
+    #cheatPanel .note { color: #6f6480; margin: 4px 0 0; }
   </style>
 </head>
 <body>
@@ -44,9 +61,11 @@
   <canvas id="game" width="900" height="620"></canvas>
   <div class="bar">
     <button id="fsBtn">⛶ Fullscreen</button>
+    <button id="cheatBtn">🐞 Cheats</button>
     <p class="hint">WASD move • Arrows shoot • E bomb • M mute • R new run • SPACE descend &nbsp;|&nbsp;
       <a href="../designer/index.html">designer</a></p>
   </div>
+  <div id="cheatPanel"></div>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

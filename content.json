@@ -1117,5 +1117,40 @@
         ]
       }
     }
+  ],
+  "trails": [
+    {
+      "id": "electric",
+      "name": "Electric Trail",
+      "style": "electric",
+      "color": "#8ad8ff",
+      "damage": 2,
+      "tickInterval": 12,
+      "lifetime": 26,
+      "width": 14,
+      "dropInterval": 4
+    },
+    {
+      "id": "blood",
+      "name": "Blood Trail",
+      "style": "blood",
+      "color": "#b5202a",
+      "damage": 1.2,
+      "tickInterval": 20,
+      "lifetime": 70,
+      "width": 17,
+      "dropInterval": 6
+    },
+    {
+      "id": "poison",
+      "name": "Poison Trail",
+      "style": "poison",
+      "color": "#6cc04a",
+      "damage": 0.8,
+      "tickInterval": 14,
+      "lifetime": 95,
+      "width": 15,
+      "dropInterval": 6
+    }
   ]
 }

@@ -63,6 +63,18 @@ export function run() {
     ok(!r.ok && r.errors.some((e) => e.includes('spawnId')), 'bad spawnId flagged');
   });
 
+  test('trails validate (style required) and refs must resolve', () => {
+    const trail = { id: 'zap', name: 'Zap', style: 'electric', color: '#8ad8ff', damage: 2 };
+    const okRes = validateContent({
+      characters: [{ ...goodPlayer, trailId: 'zap' }], weapons: [goodWeapon], trails: [trail],
+    });
+    ok(okRes.ok, okRes.errors.join('; '));
+    const badStyle = validateContent({ characters: [goodPlayer], weapons: [goodWeapon], trails: [{ ...trail, style: 'lava' }] });
+    ok(!badStyle.ok && badStyle.errors.some((e) => e.includes('style')), 'bad style flagged');
+    const badRef = validateContent({ characters: [{ ...goodPlayer, trailId: 'nope' }], weapons: [goodWeapon], trails: [trail] });
+    ok(!badRef.ok && badRef.errors.some((e) => e.includes('trailId')), 'bad trailId flagged');
+  });
+
   test('indexContent splits by role', () => {
     const enemy = { id: 'e', name: 'E', role: 'enemy', maxHealth: 5, moveSpeed: 1,
       size: 10, color: '#000', ai: 'chase', contactDamage: 1 };

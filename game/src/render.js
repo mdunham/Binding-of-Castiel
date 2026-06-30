@@ -187,6 +187,41 @@ export function drawProjectile(ctx, p) {
   ctx.fill();
 }
 
+/** Draw a damaging ground trail (electric / blood / poison styles). */
+export function drawTrail(ctx, segments, trail, tick) {
+  if (!trail || !segments || !segments.length) return;
+  const w = trail.width || 14;
+  for (const s of segments) {
+    const a = Math.max(0, s.life / (s.maxLife || 1));
+    if (trail.style === 'electric') {
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = trail.color; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(s.x - w, s.y);
+      for (let i = 1; i <= 4; i++) {
+        const nx = s.x - w + (2 * w) * (i / 4);
+        const ny = s.y + Math.sin(tick * 0.4 + i * 2 + s.x) * w * 0.45;
+        ctx.lineTo(nx, ny);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 0.7 * a; ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2); ctx.fill();
+    } else if (trail.style === 'poison') {
+      ctx.globalAlpha = 0.45 * a; ctx.fillStyle = trail.color;
+      ctx.beginPath(); ctx.arc(s.x, s.y, w, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.6 * a; ctx.fillStyle = '#d8ffcf';
+      const b = (tick * 0.4 + s.x) % 12;
+      ctx.beginPath(); ctx.arc(s.x + Math.sin(s.x) * 4, s.y - b, 2, 0, Math.PI * 2); ctx.fill();
+    } else { // blood
+      ctx.globalAlpha = 0.55 * a; ctx.fillStyle = trail.color;
+      ctx.beginPath(); ctx.arc(s.x, s.y, w, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.3 * a; ctx.fillStyle = '#3a0a0a';
+      ctx.beginPath(); ctx.arc(s.x, s.y, w * 0.55, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 /** Draw a world pickup (item-on-pedestal / heart / bomb / key) with a gentle bob. */
 export function drawPickup(ctx, pk, t) {
   const bob = Math.sin(t / 18 + pk.x) * 3;

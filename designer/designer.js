@@ -22,6 +22,7 @@ const charFields = (role) => ({
   size: NUM('Size (radius px)', 4, 60),
   color: { type: 'color', label: 'Color (fallback if no sprite)' },
   weaponId: { type: 'weaponRef', label: 'Weapon' },
+  trailId: { type: 'trailRef', label: 'Trail (player leaves it)' },
   ...(role === 'enemy' || role === 'boss'
     ? { ai: { type: 'select', label: 'AI', options: ['chase', 'wander', 'shooter', 'spawner'] },
         contactDamage: NUM('Contact Damage (half-hearts)', 0, 20),
@@ -58,12 +59,24 @@ function itemFields() {
     name: { type: 'text', label: 'Name' },
     color: { type: 'color', label: 'Color (fallback if no sprite)' },
     description: { type: 'text', label: 'Description' },
+    trailId: { type: 'trailRef', label: 'Grants trail (optional)' },
   };
   for (const [key, label] of EFFECTS) {
     f['eff_' + key] = { type: 'number', label, group: 'effects', key, step: 'any' };
   }
   return f;
 }
+const trailFields = {
+  id: { type: 'text', label: 'ID (unique, no spaces)' },
+  name: { type: 'text', label: 'Name' },
+  style: { type: 'select', label: 'Style', options: ['electric', 'blood', 'poison'] },
+  color: { type: 'color', label: 'Color' },
+  damage: NUM('Damage per tick', 0, 99),
+  tickInterval: NUM('Tick interval (frames between hits)', 1, 120, 1),
+  lifetime: NUM('Segment lifetime (frames)', 5, 300, 1),
+  width: NUM('Width / radius (px)', 2, 60),
+  dropInterval: NUM('Drop spacing (frames)', 1, 30, 1),
+};
 
 const DEFAULT_CHAR = () => ({
   id: uniqueId('char'), name: 'New Character', role: 'player',
@@ -76,6 +89,10 @@ const DEFAULT_WEAPON = () => ({
 });
 const DEFAULT_ITEM = () => ({
   id: uniqueId('item'), name: 'New Item', color: '#d8c84a', description: '', effects: {},
+});
+const DEFAULT_TRAIL = () => ({
+  id: uniqueId('trail'), name: 'New Trail', style: 'electric', color: '#8ad8ff',
+  damage: 1.5, tickInterval: 14, lifetime: 45, width: 14, dropInterval: 5,
 });
 
 // ---- DOM refs ------------------------------------------------------------
@@ -130,6 +147,7 @@ function normalize(d) {
     characters: Array.isArray(d.characters) ? d.characters : [],
     weapons: Array.isArray(d.weapons) ? d.weapons : [],
     items: Array.isArray(d.items) ? d.items : [],
+    trails: Array.isArray(d.trails) ? d.trails : [],
   };
 }
 
@@ -153,6 +171,7 @@ function onFilePicked(e) {
 function collection() {
   if (state.tab === 'weapons') return state.data.weapons;
   if (state.tab === 'items') return state.data.items;
+  if (state.tab === 'trails') return state.data.trails;
   return state.data.characters;
 }
 // Selection tracks the object directly so editing an item's id (or a duplicate
@@ -167,7 +186,8 @@ function selected() {
 
 function onAdd() {
   const item = state.tab === 'characters' ? DEFAULT_CHAR()
-    : state.tab === 'weapons' ? DEFAULT_WEAPON() : DEFAULT_ITEM();
+    : state.tab === 'weapons' ? DEFAULT_WEAPON()
+      : state.tab === 'trails' ? DEFAULT_TRAIL() : DEFAULT_ITEM();
   collection().push(item);
   selectItem(item);
 }
@@ -260,6 +280,7 @@ function renderList() {
 function fieldsFor(item) {
   if (state.tab === 'weapons') return weaponFields;
   if (state.tab === 'items') return itemFields();
+  if (state.tab === 'trails') return trailFields;
   return charFields(item.role);
 }
 
@@ -273,7 +294,8 @@ function renderForm() {
   formWrap.innerHTML = '';
   const h2 = document.createElement('h2');
   h2.textContent = state.tab === 'weapons' ? 'Edit Weapon'
-    : state.tab === 'items' ? 'Edit Item' : 'Edit Character';
+    : state.tab === 'items' ? 'Edit Item'
+      : state.tab === 'trails' ? 'Edit Trail' : 'Edit Character';
   formWrap.appendChild(h2);
 
   const grid = document.createElement('div');
@@ -340,6 +362,18 @@ function buildField(item, name, spec) {
       const o = document.createElement('option');
       o.value = ch.id; o.textContent = ch.name || ch.id;
       if (item[name] === ch.id) o.selected = true;
+      el.appendChild(o);
+    }
+    el.onchange = () => { item[name] = el.value || undefined; liveValidate(); };
+  } else if (spec.type === 'trailRef') {
+    el = document.createElement('select');
+    const none = document.createElement('option');
+    none.value = ''; none.textContent = '(none)';
+    el.appendChild(none);
+    for (const tr of state.data.trails) {
+      const o = document.createElement('option');
+      o.value = tr.id; o.textContent = tr.name || tr.id;
+      if (item[name] === tr.id) o.selected = true;
       el.appendChild(o);
     }
     el.onchange = () => { item[name] = el.value || undefined; liveValidate(); };

@@ -27,10 +27,24 @@ export function validateContent(data) {
   const characters = Array.isArray(data.characters) ? data.characters : null;
   const weapons = Array.isArray(data.weapons) ? data.weapons : null;
   const items = Array.isArray(data.items) ? data.items : (data.items == null ? [] : null);
+  const trails = Array.isArray(data.trails) ? data.trails : (data.trails == null ? [] : null);
   if (!characters) errors.push('characters must be an array');
   if (!weapons) errors.push('weapons must be an array');
   if (items === null) errors.push('items must be an array (or omitted)');
+  if (trails === null) errors.push('trails must be an array (or omitted)');
   if (errors.length) return { ok: false, errors };
+
+  const TRAIL_STYLES = ['electric', 'blood', 'poison'];
+  const trailIds = new Set();
+  trails.forEach((tr, i) => {
+    if (!tr || typeof tr.id !== 'string' || !tr.id) { errors.push(`trails[${i}] missing string id`); return; }
+    if (trailIds.has(tr.id)) errors.push(`duplicate trail id "${tr.id}"`);
+    trailIds.add(tr.id);
+    if (typeof tr.name !== 'string') errors.push(`trail "${tr.id}" needs a name`);
+    if (!TRAIL_STYLES.includes(tr.style)) errors.push(`trail "${tr.id}" style must be one of ${TRAIL_STYLES.join('/')}`);
+    if (typeof tr.color !== 'string') errors.push(`trail "${tr.id}" needs a color`);
+    if (typeof tr.damage !== 'number') errors.push(`trail "${tr.id}" needs numeric damage`);
+  });
 
   const weaponIds = new Set();
   weapons.forEach((w, i) => {
@@ -104,10 +118,18 @@ export function validateContent(data) {
     errors.push(...spriteErrors(`character "${c.id}"`, c.sprite));
   });
 
-  // spawnId refs validated after the full id set is known (may point forward).
+  // spawnId / trailId refs validated after the full id sets are known.
   for (const c of characters) {
     if (c && c.spawnId != null && !charIds.has(c.spawnId)) {
       errors.push(`character "${c.id}" spawnId "${c.spawnId}" not found`);
+    }
+    if (c && c.trailId != null && !trailIds.has(c.trailId)) {
+      errors.push(`character "${c.id}" trailId "${c.trailId}" not found`);
+    }
+  }
+  for (const it of items) {
+    if (it && it.trailId != null && !trailIds.has(it.trailId)) {
+      errors.push(`item "${it.id}" trailId "${it.trailId}" not found`);
     }
   }
 
@@ -131,11 +153,14 @@ export function indexContent(data) {
   const weapons = new Map(data.weapons.map((w) => [w.id, w]));
   const characters = new Map(data.characters.map((c) => [c.id, c]));
   const items = data.items || [];
+  const trails = data.trails || [];
   return {
     weapons,
     characters,
     items,
     itemsById: new Map(items.map((it) => [it.id, it])),
+    trails,
+    trailsById: new Map(trails.map((t) => [t.id, t])),
     players: data.characters.filter((c) => c.role === 'player'),
     enemies: data.characters.filter((c) => c.role === 'enemy'),
     bosses: data.characters.filter((c) => c.role === 'boss'),

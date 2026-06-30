@@ -26,6 +26,10 @@ export function spawnEntity(def, x, y, weapons) {
     spawnId: def.spawnId || null,
     spawnTimer: def.ai === 'spawner' ? 90 : 0, // first brood after ~1.5s
     contactDamage: def.contactDamage || 0,
+    trail: null,          // resolved trail def (player); set by main / items
+    trailDropCd: 0,       // frames until next trail segment is dropped
+    trailCd: 0,           // per-enemy cooldown for taking trail damage
+    god: false,           // cheat: invulnerability
     weapon,
     cooldown: 0,
     wanderAngle: Math.random() * Math.PI * 2,

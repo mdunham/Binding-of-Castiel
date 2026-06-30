@@ -75,6 +75,7 @@ window.addEventListener('keydown', (e) => {
 // ---- run setup -----------------------------------------------------------
 function startNewRun(playerDef) {
   const player = spawnEntity(playerDef, CX, CY, content.weapons);
+  player.trail = playerDef.trailId ? content.trailsById.get(playerDef.trailId) || null : null;
   buildFloor(playerDef, 1, player);
 }
 
@@ -93,7 +94,7 @@ function buildFloor(playerDef, floorNum, player) {
   for (const key of floor.rooms.keys()) {
     roomState.set(key, {
       visited: false, cleared: false, spawned: false,
-      enemies: [], pickups: [], obstacles: [], chests: [], bombs: [], explosions: [],
+      enemies: [], pickups: [], obstacles: [], chests: [], bombs: [], explosions: [], trail: [],
     });
   }
 
@@ -365,6 +366,33 @@ function update() {
   rs.enemies = rs.enemies.filter((e) => !e.dead);
   G.projectiles = G.projectiles.filter((pr) => !pr.dead);
 
+  // Damaging trail: drop segments while moving, age them, damage enemies on them.
+  if (p.trail) {
+    if (mv.x || mv.y) {
+      p.trailDropCd--;
+      if (p.trailDropCd <= 0) {
+        const life = p.trail.lifetime || 45;
+        rs.trail.push({ x: p.x, y: p.y, life, maxLife: life });
+        p.trailDropCd = p.trail.dropInterval || 5;
+      }
+    }
+    const tw = p.trail.width || 14;
+    let trailKill = false;
+    for (const e of rs.enemies) {
+      e.trailCd--;
+      if (e.trailCd <= 0 && rs.trail.some((s) => Math.hypot(s.x - e.x, s.y - e.y) < tw + e.radius)) {
+        if (applyDamage(e, p.trail.damage)) {
+          e.dead = true; trailKill = true; audio.play('enemyDie');
+          if (e.role !== 'boss') { const d = dropFromEnemy(G.rng, e.x, e.y); if (d) rs.pickups.push(d); }
+        }
+        e.trailCd = p.trail.tickInterval || 16;
+      }
+    }
+    if (trailKill) rs.enemies = rs.enemies.filter((e) => !e.dead);
+  }
+  for (const s of rs.trail) s.life--;
+  rs.trail = rs.trail.filter((s) => s.life > 0);
+
   // Chests (walk into to open; locked needs a key)
   for (const ch of rs.chests) {
     if (ch.opened) continue;
@@ -387,6 +415,7 @@ function update() {
       p.keys++; pk.taken = true; banner('+ Key'); audio.play('key');
     } else {
       applyItem(p, pk.item); pk.taken = true; banner(`Picked up: ${pk.item.name}`); audio.play('item');
+      if (pk.item.trailId) p.trail = content.trailsById.get(pk.item.trailId) || p.trail;
     }
   }
   rs.pickups = rs.pickups.filter((pk) => !pk.taken);
@@ -422,6 +451,7 @@ function update() {
 
 function damagePlayer(amount) {
   const p = G.player;
+  if (p.god) return; // cheat: invulnerable
   applyDamage(p, amount);
   p.iframes = 48;
   audio.play('hurt');
@@ -489,6 +519,7 @@ function drawPlay() {
   const rs = G.roomState.get(G.currentKey);
   draw.drawRoom(ctx, ROOM, room.neighbors, rs.cleared, tick);
   for (const rk of rs.obstacles) draw.drawRock(ctx, rk);
+  draw.drawTrail(ctx, rs.trail, G.player.trail, tick);
   for (const ch of rs.chests) draw.drawChest(ctx, ch, tick);
   for (const pk of rs.pickups) draw.drawPickup(ctx, pk, tick);
   for (const pr of G.projectiles) draw.drawProjectile(ctx, pr);
@@ -601,6 +632,60 @@ if (fsBtn) {
     if (document.fullscreenElement) document.exitFullscreen?.();
     else if (canvas.requestFullscreen) canvas.requestFullscreen();
   });
+}
+
+// ---- cheat / test panel --------------------------------------------------
+function curRoom() { return G && G.roomState.get(G.currentKey); }
+const Cheat = {
+  item(id) { const it = content.itemsById.get(id); const rs = curRoom(); if (it && rs) { rs.pickups.push(makeItemPickup(it, G.player.x + 40, G.player.y)); banner('Spawned: ' + it.name); } },
+  weapon(id) { const w = content.weapons.get(id); if (w && G) { G.player.weapon = w; banner('Weapon: ' + w.name); } },
+  enemy(id) { const d = content.characters.get(id); const rs = curRoom(); if (d && rs) { const e = spawnEntity(d, G.player.x + 70, G.player.y, content.weapons); scaleForFloor(e, G.floorNum); rs.enemies.push(e); rs.cleared = false; banner('Spawned: ' + d.name); } },
+  consumable(kind) { if (!G) return; const p = G.player; if (kind === 'heart') p.health = Math.min(p.maxHealth, p.health + 2); else if (kind === 'bomb') p.bombs++; else if (kind === 'key') p.keys++; },
+  trail(id) { if (G) { G.player.trail = content.trailsById.get(id) || null; banner('Trail: ' + (G.player.trail ? G.player.trail.name : 'none')); } },
+  god() { if (G) { G.player.god = !G.player.god; banner('God mode: ' + (G.player.god ? 'ON' : 'off')); } },
+  heal() { if (G) { G.player.maxHealth += 2; G.player.health = G.player.maxHealth; banner('+ Heart container'); } },
+  floor() { if (G && G.state === 'play') nextFloor(); },
+  clear() { const rs = curRoom(); if (rs) rs.enemies = []; },
+};
+window.__cheat = Cheat;
+
+const cheatBtn = document.getElementById('cheatBtn');
+const cheatPanel = document.getElementById('cheatPanel');
+if (cheatBtn && cheatPanel) {
+  cheatBtn.addEventListener('click', () => {
+    if (!content) return;
+    if (!cheatPanel.dataset.built) { buildCheatPanel(); cheatPanel.dataset.built = '1'; }
+    cheatPanel.classList.toggle('open');
+  });
+}
+
+function buildCheatPanel() {
+  const mk = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; return b; };
+  const section = (title, entries) => {
+    const h = document.createElement('h3'); h.textContent = title; cheatPanel.appendChild(h);
+    const g = document.createElement('div'); g.className = 'grid';
+    for (const e of entries) g.appendChild(e);
+    cheatPanel.appendChild(g);
+  };
+  cheatPanel.innerHTML = '';
+  const close = mk('✕ close', () => cheatPanel.classList.remove('open')); close.className = 'close';
+  cheatPanel.appendChild(close);
+  const title = document.createElement('h3'); title.textContent = 'CHEATS / TEST'; cheatPanel.appendChild(title);
+  const note = document.createElement('p'); note.className = 'note'; note.textContent = 'Start a run first; spawns appear by the player.'; cheatPanel.appendChild(note);
+
+  section('Toggles', [
+    mk('God mode', () => Cheat.god()), mk('+ Heart container', () => Cheat.heal()),
+    mk('Next floor', () => Cheat.floor()), mk('Clear room', () => Cheat.clear()),
+  ]);
+  section('Consumables', [
+    mk('+ Bomb', () => Cheat.consumable('bomb')), mk('+ Key', () => Cheat.consumable('key')), mk('Heal', () => Cheat.consumable('heart')),
+  ]);
+  section('Weapons', [...content.weapons.values()].map((w) => mk(w.name, () => Cheat.weapon(w.id))));
+  if (content.trails.length) {
+    section('Trails', content.trails.map((t) => mk(t.name, () => Cheat.trail(t.id))).concat(mk('none', () => Cheat.trail('__none'))));
+  }
+  section('Spawn item', content.items.map((it) => mk(it.name, () => Cheat.item(it.id))));
+  section('Spawn enemy', [...content.enemies, ...content.bosses].map((c) => mk(c.name, () => Cheat.enemy(c.id))));
 }
 
 // Dev hook: lets tooling/console inspect live state. Harmless in normal play.
